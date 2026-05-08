@@ -1,0 +1,1421 @@
+from __future__ import annotations
+import io
+import os
+import zipfile
+import datetime
+
+import streamlit as st
+import streamlit.components.v1 as components
+from PIL import Image
+
+from specs import FORMATS, FORMAT_GROUPS, CARD_TEXT_LIMITS
+from checker import run_all_checks, CheckResult
+from fixer import apply_fixes
+from ai_checker import run_ai_checks, AICheckResult
+from tag_parser import (
+    parse_tag, download_creative, check_url,
+    REQUIRED_UTMS, RECOMMENDED_UTMS,
+)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Feedback helpers
+# ══════════════════════════════════════════════════════════════════════════════
+
+_ACTION_HINTS: dict[str, str] = {
+    "resize":     "Please resize to the correct dimensions.",
+    "compress":   "Please reduce the file size to meet the limit.",
+    "convert":    "Please convert to the required file format.",
+    "add_border": "Please add a 1px solid border around the creative.",
+}
+
+
+def _fmt_issue(c) -> str:
+    """Turn any CheckResult or AICheckResult into a plain-English bullet."""
+    hint = _ACTION_HINTS.get(getattr(c, "fix_action", None) or "", "")
+    return f"{c.message}" + (f" {hint}" if hint else "")
+
+
+def build_feedback(items: list[dict], campaign: str = "") -> str:
+    """
+    Build a ready-to-send client feedback email.
+
+    items: list of {
+        filename   : str,
+        spec_name  : str,
+        client_checks  : list[CheckResult | AICheckResult],   # must go back to client
+        fixable_checks : list[CheckResult],                   # auto-fixed on our end
+    }
+    """
+    date_str = datetime.date.today().strftime("%d %B %Y")
+    heading  = f"Creative Submission Review{' — ' + campaign if campaign else ''}"
+
+    has_client  = any(d["client_checks"]  for d in items)
+    has_fixable = any(d["fixable_checks"] for d in items)
+
+    L: list[str] = [
+        f"Subject: {heading}",
+        f"Date: {date_str}",
+        "",
+        "Hi [Name],",
+        "",
+        (
+            "Thank you for submitting your ad creatives for the carsales Network. "
+            "We have reviewed the files against our specifications and identified the following."
+            if has_client else
+            "Thank you for submitting your ad creatives for the carsales Network. "
+            "We have reviewed the files — all issues have been corrected on your behalf "
+            "and no further action is required from you."
+        ),
+        "",
+    ]
+
+    if has_client:
+        L += [
+            "─" * 48,
+            "ITEMS REQUIRING YOUR REVISION",
+            "─" * 48,
+            "",
+        ]
+        for d in items:
+            if not d["client_checks"]:
+                continue
+            L.append(f"  {d['filename']}  ({d['spec_name']})")
+            for c in d["client_checks"]:
+                L.append(f"    • {c.name}: {_fmt_issue(c)}")
+            L.append("")
+
+    if has_fixable:
+        L += [
+            "─" * 48,
+            "ITEMS CORRECTED ON YOUR BEHALF",
+            "─" * 48,
+            "",
+        ]
+        for d in items:
+            if not d["fixable_checks"]:
+                continue
+            L.append(f"  {d['filename']}  ({d['spec_name']})")
+            for c in d["fixable_checks"]:
+                L.append(f"    • {c.name}: corrected automatically — no action required.")
+            L.append("")
+
+    if has_client:
+        L += [
+            "Please revise the flagged items and resubmit at your earliest convenience.",
+            "If you have any questions, please don't hesitate to reach out.",
+        ]
+
+    L += [
+        "",
+        "Kind regards,",
+        "[Your name]",
+        "carsales mediahouse",
+        "adops@carsalesmediahouse.com.au",
+    ]
+
+    return "\n".join(L)
+
+
+def clipboard_btn(text: str, btn_key: str) -> None:
+    """Render a branded copy-to-clipboard button via injected JS."""
+    safe = text.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
+    components.html(
+        f"""
+        <button
+            onclick="
+                navigator.clipboard.writeText(`{safe}`)
+                    .then(()=>{{
+                        this.textContent='✓ Copied to clipboard!';
+                        this.style.background='#01295F';
+                        setTimeout(()=>{{
+                            this.textContent='📋 Copy to clipboard';
+                            this.style.background='#1E90FF';
+                        }}, 2500);
+                    }})
+                    .catch(()=>{{ this.textContent='Select text above and copy manually'; }})
+            "
+            style="background:#1E90FF;color:#fff;border:none;padding:10px 24px;
+                   border-radius:6px;cursor:pointer;font-weight:600;font-size:0.87rem;
+                   font-family:Manrope,sans-serif;transition:background 0.2s;">
+            📋 Copy to clipboard
+        </button>
+        """,
+        height=52,
+    )
+
+
+def feedback_ui(items: list[dict], key_prefix: str) -> None:
+    """Render the campaign name input, email preview, and copy button."""
+    campaign = st.text_input(
+        "Campaign name (optional)",
+        placeholder="e.g. Toyota Corolla — May 2026",
+        key=f"{key_prefix}_campaign",
+    )
+
+    text = build_feedback(items, campaign)
+
+    # Editable preview — user can tweak before sending
+    edited = st.text_area(
+        "Edit before sending:",
+        value=text,
+        height=420,
+        key=f"{key_prefix}_textarea",
+    )
+
+    col_btn, col_tip = st.columns([2, 3])
+    with col_btn:
+        clipboard_btn(edited, key_prefix)
+    with col_tip:
+        st.caption("If you edited the email, the button copies your edited version.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Page config
+# ══════════════════════════════════════════════════════════════════════════════
+st.set_page_config(
+    page_title="carsales Ad Spec Checker",
+    page_icon="🚗",
+    layout="centered",
+    initial_sidebar_state="expanded",
+)
+
+# ── Brand styles ──────────────────────────────────────────────────────────────
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&display=swap');
+
+    html, body, [class*="css"], .stMarkdown, .stText, button, input, textarea, select {
+        font-family: 'Manrope', sans-serif !important;
+    }
+
+    [data-testid="stSidebar"] { background-color: #01295F !important; }
+    [data-testid="stSidebar"],
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] .stMarkdown { color: #FFFFFF !important; }
+    [data-testid="stSidebar"] a { color: #66CBE1 !important; }
+    [data-testid="stSidebar"] hr { border-color: rgba(255,255,255,0.2) !important; }
+    [data-testid="stSidebar"] input {
+        background-color: #02306B !important;
+        color: #FFFFFF !important;
+        border-color: rgba(255,255,255,0.3) !important;
+    }
+    [data-testid="stSidebar"] .stTextInput label { color: #FFFFFF !important; }
+
+    [data-testid="stAppViewContainer"]::before {
+        content: "";
+        display: block;
+        height: 5px;
+        background: linear-gradient(90deg, #01295F 0%, #1E90FF 100%);
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        z-index: 9999;
+    }
+
+    h1 { color: #01295F !important; font-weight: 800 !important; }
+    h2, h3 { color: #01295F !important; font-weight: 700 !important; }
+
+    [data-testid="stMetricValue"] { color: #1E90FF !important; font-weight: 700 !important; }
+
+    button[role="tab"][aria-selected="true"] {
+        color: #1E90FF !important;
+        border-bottom: 3px solid #1E90FF !important;
+        font-weight: 700 !important;
+    }
+
+    hr { border-color: #C8D8E8 !important; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    try:
+        st.image(
+            "https://business.carsales.com.au/wp-content/uploads/2024/02/Carsales-Business_reversed-horizontal.svg",
+            width=200,
+        )
+    except Exception:
+        st.markdown(
+            '<p style="font-size:1.4rem;font-weight:800;color:#FFFFFF;margin:0;">'
+            '<span style="color:#1E90FF;">carsales</span> mediahouse</p>',
+            unsafe_allow_html=True,
+        )
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    st.markdown("## Settings")
+    # Pre-populate from Streamlit Cloud secrets if available
+    _preset_key = ""
+    try:
+        _preset_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+    except Exception:
+        pass
+    api_key = st.text_input(
+        "Anthropic API Key (optional)",
+        value=_preset_key,
+        type="password",
+        help="Enables AI visual checks: branding presence, competitor references, all-caps text, and card clear-zone detection.",
+        placeholder="sk-ant-...",
+    )
+    st.markdown("---")
+    st.markdown(
+        "**AI checks** (when key provided):\n"
+        "- ✅ Branding visible\n"
+        "- ✅ No competitor references\n"
+        "- ✅ No prohibited all-caps text\n"
+        "- ✅ Clear zone clear (Card only)"
+    )
+    st.markdown("---")
+    st.caption("Specs: [carsales.com.au/ad-specs](https://business.carsales.com.au/ad-specs/) · Jan 2026")
+
+# ── Header ────────────────────────────────────────────────────────────────────
+st.markdown(
+    """
+    <div style="display:flex;align-items:center;gap:18px;margin-bottom:4px;">
+        <img src="https://resource.csnstatic.com/retail/globals/logo/v3/carsales.svg"
+             style="height:38px;" onerror="this.style.display='none'">
+        <h1 style="margin:0;padding:0;font-size:1.8rem;color:#01295F;font-weight:800;">
+            Ad Spec Checker
+        </h1>
+    </div>
+    <p style="color:#596169;margin-top:2px;margin-bottom:0;font-size:0.95rem;">
+        Check and auto-fix ad creatives against carsales Network specifications.
+    </p>
+    """,
+    unsafe_allow_html=True,
+)
+st.divider()
+
+# ── Shared dimension → spec lookup (used in Multi-file and Ad Tag tabs) ───────
+_DIM_LOOKUP: dict = {}
+for _k, _s in FORMATS.items():
+    if _s["dimensions"]:
+        _DIM_LOOKUP.setdefault(tuple(_s["dimensions"]), []).append(_k)
+    elif _s.get("aspect_ratio") == "1:1":
+        _DIM_LOOKUP.setdefault("1:1", []).append(_k)
+
+tab1, tab2, tab3, tab4 = st.tabs(["Single file", "Multi-file", "ZIP bundle", "Ad Tag"])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — Single file
+# ══════════════════════════════════════════════════════════════════════════════
+with tab1:
+
+    st.subheader("1 · Select ad format")
+    col_group, col_size = st.columns(2)
+    with col_group:
+        group = st.selectbox("Format group", list(FORMAT_GROUPS.keys()), key="t1_group")
+    with col_size:
+        format_key = st.selectbox(
+            "Size / placement",
+            FORMAT_GROUPS[group],
+            format_func=lambda k: FORMATS[k]["name"],
+            key="t1_format",
+        )
+
+    spec = FORMATS[format_key]
+
+    with st.expander("View spec requirements"):
+        c1, c2, c3 = st.columns(3)
+        if spec["dimensions"]:
+            c1.metric("Dimensions", f"{spec['dimensions'][0]}×{spec['dimensions'][1]}px")
+        elif spec.get("aspect_ratio"):
+            c1.metric("Aspect Ratio", spec["aspect_ratio"])
+        else:
+            c1.metric("Dimensions", "Any")
+        c2.metric("Max File Size", f"{spec['max_file_size_kb']} KB")
+        c3.metric("Formats", " / ".join(spec["accepted_formats"]))
+        if spec.get("animation_max_seconds"):
+            d1, d2, d3 = st.columns(3)
+            d1.metric("Max Animation", f"{spec['animation_max_seconds']}s")
+            d2.metric("Max Plays", str(spec["animation_max_plays"]) if spec.get("animation_max_plays") else "Unlimited")
+            d3.metric("Max FPS", str(spec["max_fps"]))
+        if spec.get("clear_zone_top_px"):
+            st.warning(f"⚠️  Clear zone: top **{spec['clear_zone_top_px']}px** must contain no copy or logos.")
+        if spec.get("logo_white_bg_required"):
+            st.info("Logo must be on a **white or transparent** background.")
+
+    st.divider()
+
+    # Card text fields
+    card_text_results: list[dict] = []
+    if format_key == "card_image":
+        st.subheader("2 · Card text fields")
+        with st.expander("Check character limits"):
+            for field_name, limit in CARD_TEXT_LIMITS.items():
+                val = st.text_input(f"{field_name} (max {limit} chars)", key=f"ct_{field_name}")
+                if val:
+                    ok = len(val) <= limit
+                    card_text_results.append({
+                        "name": field_name,
+                        "passed": ok,
+                        "message": (
+                            f"{len(val)}/{limit} chars ✓" if ok
+                            else f"{len(val)}/{limit} chars — exceeds {limit}-character limit"
+                        ),
+                    })
+        upload_label = "3 · Upload card image"
+        st.divider()
+    else:
+        upload_label = "2 · Upload creative"
+
+    st.subheader(upload_label)
+    uploaded = st.file_uploader("JPEG, PNG or GIF", type=["jpg", "jpeg", "png", "gif"], key="t1_upload")
+
+    if not uploaded:
+        st.info("Upload a file above to run checks.")
+    else:
+        file_bytes = uploaded.read()
+        try:
+            img = Image.open(io.BytesIO(file_bytes))
+            img.load()
+            load_ok = True
+        except Exception as e:
+            st.error(f"Could not open image: {e}")
+            load_ok = False
+
+        if load_ok:
+            img_format: str = (
+                img.format
+                or os.path.splitext(uploaded.name)[1].lstrip(".").upper()
+                or "JPEG"
+            )
+
+            st.divider()
+            prev_col, info_col = st.columns([1, 2])
+            with prev_col:
+                st.image(img, use_container_width=True)
+            with info_col:
+                st.markdown("**File info**")
+                st.write(f"**Name:** `{uploaded.name}`")
+                st.write(f"**Format:** `{img_format}`")
+                st.write(f"**Dimensions:** `{img.size[0]}×{img.size[1]}px`")
+                st.write(f"**Size:** `{len(file_bytes) / 1024:.1f} KB`")
+                if getattr(img, "n_frames", 1) > 1:
+                    st.write(f"**Frames:** `{img.n_frames}` (animated GIF)")
+
+            st.divider()
+
+            checks      = run_all_checks(img, file_bytes, img_format, spec)
+            failed      = [c for c in checks if not c.passed]
+            fixable     = [c for c in failed if c.fixable]
+            tech_client = [c for c in failed if c.needs_client]
+
+            ai_results: list[AICheckResult] = []
+            if api_key:
+                with st.spinner("Running AI visual checks..."):
+                    ai_results = run_ai_checks(img, spec, format_key, api_key)
+            ai_client = [r for r in ai_results if not r.passed]
+
+            st.subheader("Results")
+            total    = len(checks)
+            n_pass   = total - len(failed)
+            all_client_issues  = tech_client + list(ai_client)
+            card_text_failures = [r for r in card_text_results if not r["passed"]]
+            all_clear = (not failed) and (not ai_client) and (not card_text_failures)
+
+            if all_clear:
+                st.success(
+                    f"All {total} technical checks passed"
+                    + (" · AI checks passed" if ai_results else "")
+                    + " ✓  Creative is ready to submit."
+                )
+            elif fixable and not all_client_issues and not card_text_failures:
+                st.warning(
+                    f"{n_pass}/{total} checks passed — "
+                    f"{len(fixable)} issue{'s' if len(fixable) != 1 else ''} can be auto-fixed below."
+                )
+            else:
+                parts = []
+                if fixable:
+                    parts.append(f"{len(fixable)} auto-fixable")
+                if all_client_issues:
+                    parts.append(f"{len(all_client_issues)} need client revision")
+                if card_text_failures:
+                    parts.append(f"{len(card_text_failures)} text field issue{'s' if len(card_text_failures) != 1 else ''}")
+                st.error(f"{n_pass}/{total} checks passed — {', '.join(parts)}.")
+
+            st.markdown("**Technical checks:**")
+            for c in checks:
+                icon = "✅" if c.passed else ("🔧" if c.fixable else "❌")
+                st.markdown(f"{icon} &nbsp; **{c.name}:** {c.message}")
+
+            if card_text_results:
+                st.markdown("**Text field checks:**")
+                for r in card_text_results:
+                    icon = "✅" if r["passed"] else "❌"
+                    st.markdown(f"{icon} &nbsp; **{r['name']}:** {r['message']}")
+
+            if ai_results:
+                st.markdown("**AI visual checks:**")
+                for r in ai_results:
+                    icon = "✅" if r.passed else "❌"
+                    conf = f" *(confidence: {r.confidence})*" if r.confidence != "high" else ""
+                    st.markdown(f"{icon} &nbsp; **{r.name}:** {r.message}{conf}")
+            elif not api_key:
+                st.info(
+                    "💡 Add your Anthropic API key in the sidebar to enable AI visual checks "
+                    "(branding, competitor references, text casing, clear zone)."
+                )
+
+            st.divider()
+
+            # Auto-fix
+            if fixable:
+                st.subheader("🔧 Auto-fix")
+                names = ", ".join(f"**{c.name}**" for c in fixable)
+                st.write(f"The following can be fixed automatically: {names}")
+                if st.button("Apply fixes & prepare download", type="primary", key="t1_fix"):
+                    with st.spinner("Applying fixes..."):
+                        fixed_bytes, new_fmt, applied = apply_fixes(img.copy(), file_bytes, img_format, spec, checks)
+                    if applied:
+                        st.success(f"Applied: {', '.join(applied)}")
+                        final_kb = len(fixed_bytes) / 1024
+                        if final_kb > spec["max_file_size_kb"]:
+                            st.warning(
+                                f"File is still {final_kb:.1f} KB after compression "
+                                f"(limit: {spec['max_file_size_kb']} KB). "
+                                "The client may need to simplify the artwork further."
+                            )
+                        ext  = new_fmt.lower().replace("jpeg", "jpg")
+                        base = os.path.splitext(uploaded.name)[0]
+                        st.download_button(
+                            label=f"⬇️  Download fixed file  ({final_kb:.1f} KB)",
+                            data=fixed_bytes,
+                            file_name=f"{base}_fixed.{ext}",
+                            mime=f"image/{ext}",
+                            key="t1_download",
+                        )
+                    else:
+                        st.info("No changes were needed.")
+
+            # Client revision list
+            if all_client_issues or card_text_failures:
+                st.subheader("❌ Needs client revision")
+                st.error("The following issues **cannot be auto-fixed** and must be corrected by the client:")
+                for c in tech_client:
+                    st.markdown(f"• **{c.name}:** {c.message}")
+                for r in ai_client:
+                    st.markdown(f"• **{r.name}:** {r.message}")
+                for r in card_text_failures:
+                    st.markdown(f"• **{r['name']}:** {r['message']}")
+
+            # Clear zone reminder
+            if spec.get("clear_zone_top_px") and not api_key:
+                st.divider()
+                st.warning(
+                    f"⚠️  **Clear zone reminder:** The top **{spec['clear_zone_top_px']}px** of this "
+                    "carsales Card image must contain no copy or logos. "
+                    "Add an Anthropic API key to check this automatically."
+                )
+
+            # ── Client feedback email ─────────────────────────────────────────
+            if failed or ai_client or card_text_failures:
+                st.divider()
+                with st.expander("📋 Generate client feedback email", expanded=False):
+                    # Build text-field issues as pseudo-CheckResult dicts
+                    text_client = [
+                        type("R", (), {"name": r["name"], "message": r["message"], "fix_action": None})()
+                        for r in card_text_failures
+                    ]
+                    feedback_items = [{
+                        "filename":      uploaded.name,
+                        "spec_name":     spec["name"],
+                        "client_checks": all_client_issues + text_client,
+                        "fixable_checks": fixable,
+                    }]
+                    feedback_ui(feedback_items, "t1")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — Multi-file
+# ══════════════════════════════════════════════════════════════════════════════
+with tab2:
+    st.subheader("Multi-file checker")
+    st.caption("Upload multiple creatives at once — each file is automatically matched to its spec by dimensions. No ZIP needed.")
+
+    uploaded_files = st.file_uploader(
+        "JPEG, PNG or GIF — select as many files as you like",
+        type=["jpg", "jpeg", "png", "gif"],
+        accept_multiple_files=True,
+        key="mf_upload",
+    )
+
+    if not uploaded_files:
+        st.info("Upload one or more files above to run checks.")
+    else:
+        # Dimension → spec lookup (shared module-level dict)
+        dim_lookup = _DIM_LOOKUP
+
+        # Load all files
+        file_data = []
+        for uf in uploaded_files:
+            fb = uf.read()
+            try:
+                im = Image.open(io.BytesIO(fb))
+                im.load()
+                fmt = im.format or os.path.splitext(uf.name)[1].lstrip(".").upper() or "JPEG"
+                w, h = im.size
+                matches = dim_lookup.get((w, h), [])
+                if not matches and w == h:
+                    matches = dim_lookup.get("1:1", [])
+                file_data.append({"uf": uf, "fb": fb, "img": im, "fmt": fmt,
+                                   "w": w, "h": h, "matches": matches, "error": None})
+            except Exception as e:
+                file_data.append({"uf": uf, "fb": fb, "img": None, "fmt": None,
+                                   "w": None, "h": None, "matches": [], "error": str(e)})
+
+        # Summary strip
+        n_matched      = sum(1 for f in file_data if f["matches"])
+        n_unrecognised = sum(1 for f in file_data if not f["matches"] and not f["error"])
+        n_errors       = sum(1 for f in file_data if f["error"])
+
+        sm1, sm2, sm3 = st.columns(3)
+        sm1.metric("Files uploaded", len(file_data))
+        sm2.metric("Format matched", n_matched)
+        sm3.metric("Unrecognised",   n_unrecognised + n_errors)
+        st.divider()
+
+        # Per-file results — also collect issues for feedback
+        all_issues_mf: list[dict] = []
+
+        for i, fd in enumerate(file_data):
+            uf = fd["uf"]
+
+            if fd["error"]:
+                label = f"⚠️  {uf.name} — could not open"
+            elif not fd["matches"]:
+                label = f"❓  {uf.name} — {fd['w']}×{fd['h']}px — no matching spec"
+            elif len(fd["matches"]) == 1:
+                label = f"{uf.name} — {FORMATS[fd['matches'][0]]['name']}"
+            else:
+                label = f"{uf.name} — {fd['w']}×{fd['h']}px — {len(fd['matches'])} possible specs"
+
+            with st.expander(label, expanded=(len(file_data) <= 4)):
+
+                if fd["error"]:
+                    st.error(f"Could not open file: {fd['error']}")
+                    continue
+
+                prev_col, detail_col = st.columns([1, 2])
+                with prev_col:
+                    st.image(fd["img"], use_container_width=True)
+                    st.caption(f"{fd['w']}×{fd['h']}px · {len(fd['fb'])/1024:.1f} KB · {fd['fmt']}")
+
+                with detail_col:
+                    if not fd["matches"]:
+                        st.error(f"Dimensions {fd['w']}×{fd['h']}px don't match any known carsales ad spec.")
+                        st.caption("Check the file is the correct creative, or use the Single file tab to manually select a format.")
+                    else:
+                        if len(fd["matches"]) == 1:
+                            spec_key = fd["matches"][0]
+                            st.markdown(f"**Matched:** {FORMATS[spec_key]['name']}")
+                        else:
+                            spec_key = st.selectbox(
+                                "Multiple specs share these dimensions — select the correct one:",
+                                fd["matches"],
+                                format_func=lambda k: FORMATS[k]["name"],
+                                key=f"mf_spec_{i}",
+                            )
+
+                        mf_spec   = FORMATS[spec_key]
+                        mf_checks = run_all_checks(fd["img"], fd["fb"], fd["fmt"], mf_spec)
+                        mf_failed  = [c for c in mf_checks if not c.passed]
+                        mf_fixable = [c for c in mf_failed if c.fixable]
+                        mf_client  = [c for c in mf_failed if c.needs_client]
+
+                        if not mf_failed:
+                            st.success("All checks passed ✓")
+                        elif mf_fixable and not mf_client:
+                            st.warning(f"{len(mf_fixable)} issue{'s' if len(mf_fixable)!=1 else ''} — can be auto-fixed below")
+                        else:
+                            st.error(f"{len(mf_failed)} issue{'s' if len(mf_failed)!=1 else ''} — {len(mf_client)} need client revision")
+
+                        for c in mf_checks:
+                            icon = "✅" if c.passed else ("🔧" if c.fixable else "❌")
+                            st.markdown(f"{icon} **{c.name}:** {c.message}")
+
+                        if mf_fixable:
+                            if st.button("Apply fixes & download", key=f"mf_fix_{i}", type="primary"):
+                                with st.spinner("Applying fixes..."):
+                                    fixed_bytes, new_fmt, applied = apply_fixes(
+                                        fd["img"].copy(), fd["fb"], fd["fmt"], mf_spec, mf_checks
+                                    )
+                                if applied:
+                                    st.success(f"Applied: {', '.join(applied)}")
+                                    final_kb = len(fixed_bytes) / 1024
+                                    ext  = new_fmt.lower().replace("jpeg", "jpg")
+                                    base = os.path.splitext(uf.name)[0]
+                                    st.download_button(
+                                        label=f"⬇️  Download fixed  ({final_kb:.1f} KB)",
+                                        data=fixed_bytes,
+                                        file_name=f"{base}_fixed.{ext}",
+                                        mime=f"image/{ext}",
+                                        key=f"mf_dl_{i}",
+                                    )
+
+                        # Collect for bulk feedback
+                        if mf_failed:
+                            all_issues_mf.append({
+                                "filename":      uf.name,
+                                "spec_name":     mf_spec["name"],
+                                "client_checks":  mf_client,
+                                "fixable_checks": mf_fixable,
+                            })
+
+        # ── Bulk client feedback ──────────────────────────────────────────────
+        if all_issues_mf:
+            st.divider()
+            with st.expander("📋 Generate client feedback email", expanded=False):
+                st.caption(
+                    f"Summarises issues across **{len(all_issues_mf)} file{'s' if len(all_issues_mf)!=1 else ''}** "
+                    "that need attention."
+                )
+                feedback_ui(all_issues_mf, "mf")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — ZIP bundle
+# ══════════════════════════════════════════════════════════════════════════════
+with tab3:
+    st.subheader("ZIP bundle checker")
+    st.caption(
+        "Upload a ZIP containing ad creatives. "
+        "The app matches each file to a spec by dimensions and reports what's present, what has issues, and what's missing."
+    )
+
+    selected_groups = st.multiselect(
+        "Format groups to check",
+        list(FORMAT_GROUPS.keys()),
+        default=["Network Display"],
+        key="t2_groups",
+    )
+
+    zip_upload = st.file_uploader("Upload ZIP file", type=["zip"], key="t2_zip")
+
+    if not zip_upload or not selected_groups:
+        st.info("Select at least one format group and upload a ZIP file.")
+    else:
+        zip_bytes = zip_upload.read()
+        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif"}
+
+        images: dict[str, tuple] = {}
+        bad_files: list[str] = []
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                for name in zf.namelist():
+                    if name.endswith("/"):
+                        continue
+                    ext = os.path.splitext(name)[1].lower()
+                    if ext not in IMAGE_EXTS:
+                        continue
+                    basename = os.path.basename(name)
+                    if not basename or basename.startswith(".") or basename.startswith("__"):
+                        continue
+                    try:
+                        fb = zf.read(name)
+                        im = Image.open(io.BytesIO(fb))
+                        im.load()
+                        fmt = im.format or ext.lstrip(".").upper() or "JPEG"
+                        images[name] = (fb, im, fmt, basename)
+                    except Exception:
+                        bad_files.append(basename)
+            zip_ok = True
+        except zipfile.BadZipFile:
+            st.error("Could not read the ZIP file — make sure it's a valid .zip archive.")
+            zip_ok = False
+
+        if zip_ok:
+            if not images:
+                st.warning("No image files (JPEG, PNG, GIF) found in the ZIP.")
+            else:
+                expected_keys: list[str] = []
+                for g in selected_groups:
+                    expected_keys.extend(FORMAT_GROUPS[g])
+
+                matched: set[str] = set()
+                results: dict[str, dict | None] = {}
+
+                for spec_key in expected_keys:
+                    s = FORMATS[spec_key]
+                    found = None
+                    for fname, (fb, im, fmt, basename) in images.items():
+                        if fname in matched:
+                            continue
+                        w, h = im.size
+                        if s["dimensions"] is not None and (w, h) == tuple(s["dimensions"]):
+                            found = (fname, fb, im, fmt, basename)
+                            break
+                        elif s.get("aspect_ratio") == "1:1" and s["dimensions"] is None and w == h:
+                            found = (fname, fb, im, fmt, basename)
+                            break
+                    if found:
+                        fname, fb, im, fmt, basename = found
+                        matched.add(fname)
+                        chks = run_all_checks(im, fb, fmt, s)
+                        results[spec_key] = {
+                            "filename": basename,
+                            "checks":   chks,
+                            "failed":   [c for c in chks if not c.passed],
+                        }
+                    else:
+                        results[spec_key] = None
+
+                unmatched = [
+                    (os.path.basename(f), images[f][1], images[f][0])
+                    for f in images if f not in matched
+                ]
+
+                found_ok     = [k for k, v in results.items() if v is not None and not v["failed"]]
+                found_issues = [k for k, v in results.items() if v is not None and v["failed"]]
+                missing      = [k for k, v in results.items() if v is None]
+
+                st.divider()
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("✅ Found & valid",    len(found_ok))
+                m2.metric("⚠️ Found with issues", len(found_issues))
+                m3.metric("❌ Missing",           len(missing))
+                m4.metric("📁 Unrecognised",      len(unmatched))
+                st.divider()
+
+                for group_name in selected_groups:
+                    st.markdown(f"### {group_name}")
+                    for spec_key in FORMAT_GROUPS[group_name]:
+                        s      = FORMATS[spec_key]
+                        result = results.get(spec_key)
+                        if result is None:
+                            st.markdown(f"❌ &nbsp; **{s['name']}** — *not found in ZIP*")
+                        elif not result["failed"]:
+                            st.markdown(f"✅ &nbsp; **{s['name']}** — `{result['filename']}` — all checks passed")
+                        else:
+                            issue_names = ", ".join(c.name for c in result["failed"])
+                            st.markdown(f"⚠️ &nbsp; **{s['name']}** — `{result['filename']}` — issues: {issue_names}")
+                            with st.expander(f"Details — {result['filename']}"):
+                                for c in result["checks"]:
+                                    icon = "✅" if c.passed else ("🔧" if c.fixable else "❌")
+                                    st.markdown(f"{icon} **{c.name}:** {c.message}")
+                    st.write("")
+
+                if unmatched:
+                    st.divider()
+                    st.markdown("### Unrecognised files")
+                    st.caption("These files were in the ZIP but didn't match any expected format in the selected groups.")
+                    for basename, im, fb in unmatched:
+                        w, h = im.size
+                        size_kb = len(fb) / 1024
+                        st.markdown(f"• `{basename}` — {w}×{h}px, {size_kb:.1f} KB")
+
+                if bad_files:
+                    st.warning(f"Could not open: {', '.join(bad_files)}")
+
+                # ── Client feedback for ZIP results ───────────────────────────
+
+                zip_issues = [
+                    {
+                        "filename":      results[k]["filename"],
+                        "spec_name":     FORMATS[k]["name"],
+                        "client_checks":  [c for c in results[k]["failed"] if c.needs_client],
+                        "fixable_checks": [c for c in results[k]["failed"] if c.fixable],
+                    }
+                    for k in found_issues
+                ]
+                if zip_issues:
+                    st.divider()
+                    with st.expander("📋 Generate client feedback email", expanded=False):
+                        st.caption(
+                            f"Summarises issues across **{len(zip_issues)} file{'s' if len(zip_issues)!=1 else ''}** "
+                            "found in the ZIP."
+                        )
+                        feedback_ui(zip_issues, "zp")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4 — Ad Tag
+# ══════════════════════════════════════════════════════════════════════════════
+with tab4:
+    st.subheader("Ad tag checker")
+
+    tag_mode = st.radio(
+        "Input method",
+        ["Paste a single tag", "Upload Excel file"],
+        horizontal=True,
+        key="tag_mode",
+    )
+    st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # EXCEL UPLOAD MODE
+    # ══════════════════════════════════════════════════════════════════════════
+    if tag_mode == "Upload Excel file":
+        st.caption(
+            "Upload the Excel file your client sent. "
+            "The app will detect the tag and click URL columns, then check every row."
+        )
+
+        xl_file = st.file_uploader("Upload Excel file (.xlsx)", type=["xlsx"], key="xl_upload")
+
+        if not xl_file:
+            st.info("Upload an Excel file above to begin.")
+        else:
+            import pandas as pd
+
+            try:
+                df = pd.read_excel(io.BytesIO(xl_file.read()), sheet_name=0, dtype=str)
+                df = df.dropna(how="all").reset_index(drop=True)
+                xl_ok = True
+            except Exception as e:
+                st.error(f"Could not read Excel file: {e}")
+                xl_ok = False
+
+            if xl_ok:
+                st.caption(f"{len(df)} rows · {len(df.columns)} columns · Sheet 1")
+
+                with st.expander("Preview first 5 rows", expanded=False):
+                    st.dataframe(df.head(5), use_container_width=True)
+
+                st.markdown("#### Column mapping")
+                st.caption("The app has made its best guess — adjust if needed.")
+
+                col_names = [str(c) for c in df.columns]
+
+                def _best_col(keywords: list[str], pattern: str | None = None) -> str | None:
+                    # First try column name keywords
+                    for c in col_names:
+                        if any(kw in c.lower() for kw in keywords):
+                            return c
+                    # Then try cell content pattern
+                    if pattern:
+                        for c in col_names:
+                            sample = df[c].dropna().astype(str).head(10)
+                            if sample.str.contains(pattern, regex=True, na=False).mean() > 0.4:
+                                return c
+                    return None
+
+                default_tag_col  = _best_col(["tag", "code", "script", "creative tag"], r"<[a-zA-Z]")
+                default_name_col = _best_col(["name", "placement", "format", "ad name", "size", "description"])
+                default_url_col  = _best_col(["click", "landing", "destination", "url", "link"], r"^https?://")
+
+                none_opt = "— not in this file —"
+                all_cols_opt = [none_opt] + col_names
+
+                mc1, mc2, mc3 = st.columns(3)
+                with mc1:
+                    tag_col = st.selectbox(
+                        "Tag / code column *(required)*",
+                        col_names,
+                        index=col_names.index(default_tag_col) if default_tag_col in col_names else 0,
+                        key="xl_tag_col",
+                    )
+                with mc2:
+                    name_col_raw = st.selectbox(
+                        "Placement / name column",
+                        all_cols_opt,
+                        index=(all_cols_opt.index(default_name_col) if default_name_col in all_cols_opt else 0),
+                        key="xl_name_col",
+                    )
+                    name_col = name_col_raw if name_col_raw != none_opt else None
+                with mc3:
+                    url_col_raw = st.selectbox(
+                        "Click URL column *(if separate)*",
+                        all_cols_opt,
+                        index=(all_cols_opt.index(default_url_col) if default_url_col in all_cols_opt else 0),
+                        key="xl_url_col",
+                    )
+                    url_col = url_col_raw if url_col_raw != none_opt else None
+
+                check_urls_toggle = st.checkbox(
+                    "Check click URLs & UTMs (makes a network request per row — slower)",
+                    value=True,
+                    key="xl_check_urls",
+                )
+
+                max_rows = min(len(df), 50)
+                if len(df) > 50:
+                    st.warning(f"File has {len(df)} rows — processing the first 50.")
+
+                if st.button("Run checks on all rows", type="primary", key="xl_run"):
+                    xl_results = []
+                    prog = st.progress(0)
+                    status_ph = st.empty()
+
+                    for i in range(max_rows):
+                        row = df.iloc[i]
+                        name = str(row[name_col]).strip() if name_col and str(row.get(name_col, "")) != "nan" else f"Row {i+1}"
+                        tag_html = str(row.get(tag_col, "")).strip()
+                        extra_url = str(row.get(url_col, "")).strip() if url_col else ""
+
+                        status_ph.caption(f"Processing {i+1}/{max_rows}: {name} …")
+
+                        if not tag_html or tag_html == "nan":
+                            xl_results.append({"name": name, "skipped": True})
+                            prog.progress((i + 1) / max_rows)
+                            continue
+
+                        parsed = parse_tag(tag_html)
+
+                        # Creative download + check
+                        creative_summary = None
+                        if parsed.creative_url:
+                            dl = download_creative(parsed.creative_url)
+                            if dl:
+                                try:
+                                    c_bytes, c_fmt = dl
+                                    c_img = Image.open(io.BytesIO(c_bytes))
+                                    c_img.load()
+                                    c_w, c_h = c_img.size
+                                    c_matches = _DIM_LOOKUP.get((c_w, c_h), [])
+                                    if not c_matches and c_w == c_h:
+                                        c_matches = _DIM_LOOKUP.get("1:1", [])
+                                    if c_matches:
+                                        c_spec  = FORMATS[c_matches[0]]
+                                        c_chks  = run_all_checks(c_img, c_bytes, c_fmt, c_spec)
+                                        c_fail  = [c for c in c_chks if not c.passed]
+                                        c_fix   = [c for c in c_fail if c.fixable]
+                                        c_cli   = [c for c in c_fail if c.needs_client]
+                                        creative_summary = {
+                                            "spec":    c_spec["name"],
+                                            "dims":    f"{c_w}×{c_h}px",
+                                            "checks":  c_chks,
+                                            "failed":  c_fail,
+                                            "fixable": c_fix,
+                                            "client":  c_cli,
+                                            "bytes":   c_bytes,
+                                            "fmt":     c_fmt,
+                                            "spec_key": c_matches[0],
+                                        }
+                                    else:
+                                        creative_summary = {"error": f"Dimensions {c_w}×{c_h}px — no matching spec"}
+                                except Exception as e:
+                                    creative_summary = {"error": f"Image error: {e}"}
+                            else:
+                                creative_summary = {"error": "Download failed"}
+
+                        # Click URL check
+                        url_summary = None
+                        click_url = parsed.click_url or (extra_url if extra_url and extra_url != "nan" else None)
+                        if click_url and check_urls_toggle:
+                            url_summary = check_url(click_url)
+
+                        xl_results.append({
+                            "name":     name,
+                            "skipped":  False,
+                            "tag_html": tag_html,
+                            "parsed":   parsed,
+                            "creative": creative_summary,
+                            "url":      url_summary,
+                            "click_url": click_url,
+                        })
+                        prog.progress((i + 1) / max_rows)
+
+                    prog.empty()
+                    status_ph.empty()
+                    st.session_state["_xl_results"] = xl_results
+                    st.session_state["_xl_file_id"] = xl_file.name
+
+                # Clear results if file changed
+                if st.session_state.get("_xl_file_id") != xl_file.name:
+                    st.session_state.pop("_xl_results", None)
+
+                # ── Show results ──────────────────────────────────────────────
+                if "_xl_results" in st.session_state:
+                    xl_results = st.session_state["_xl_results"]
+                    processed  = [r for r in xl_results if not r.get("skipped")]
+
+                    # Summary metrics
+                    st.divider()
+                    def _creative_status(r):
+                        c = r.get("creative")
+                        if c is None:              return "no_url"
+                        if "error" in c:           return "error"
+                        if c["client"]:            return "client"
+                        if c["fixable"]:           return "fixable"
+                        return "pass"
+
+                    def _url_status(r):
+                        u = r.get("url")
+                        if u is None:              return "no_url"
+                        if not u.resolves:         return "error"
+                        if u.is_staging:           return "staging"
+                        if u.utm_missing:          return "missing_utm"
+                        return "pass"
+
+                    sm1, sm2, sm3, sm4, sm5 = st.columns(5)
+                    sm1.metric("Rows processed",  len(processed))
+                    sm2.metric("✅ Creative OK",   sum(1 for r in processed if _creative_status(r) == "pass"))
+                    sm3.metric("⚠️ Creative issues", sum(1 for r in processed if _creative_status(r) in ("client", "fixable")))
+                    sm4.metric("✅ UTMs OK",       sum(1 for r in processed if _url_status(r) == "pass"))
+                    sm5.metric("❌ UTM issues",    sum(1 for r in processed if _url_status(r) in ("error", "missing_utm", "staging")))
+
+                    st.divider()
+
+                    # Results per row
+                    all_xl_issues = []
+                    for r in xl_results:
+                        if r.get("skipped"):
+                            st.markdown(f"⬜ **{r['name']}** — empty row, skipped")
+                            continue
+
+                        c_st = _creative_status(r)
+                        u_st = _url_status(r)
+
+                        # Row header icon
+                        if c_st == "pass" and u_st in ("pass", "no_url"):
+                            row_icon = "✅"
+                        elif c_st in ("client",) or u_st in ("error", "staging"):
+                            row_icon = "❌"
+                        else:
+                            row_icon = "⚠️"
+
+                        c = r.get("creative") or {}
+                        u = r.get("url")
+
+                        c_label = {
+                            "pass":    f"Creative ✅ {c.get('dims','')}",
+                            "fixable": f"Creative 🔧 {c.get('dims','')} — fixable",
+                            "client":  f"Creative ❌ {c.get('dims','')} — needs revision",
+                            "error":   f"Creative ⚠️ {c.get('error','')}",
+                            "no_url":  "Creative — no URL in tag",
+                        }.get(c_st, "")
+
+                        u_label = {
+                            "pass":        "URL ✅ resolves · UTMs OK",
+                            "missing_utm": f"URL ⚠️ missing UTM: {', '.join(u.utm_missing) if u else ''}",
+                            "staging":     "URL ❌ staging domain detected",
+                            "error":       f"URL ❌ {f'HTTP {u.status_code}' if u and u.status_code else 'failed to resolve'}",
+                            "no_url":      "URL — not checked",
+                        }.get(u_st, "")
+
+                        label = f"{row_icon}  **{r['name']}** — {c_label}  ·  {u_label}"
+
+                        with st.expander(label, expanded=False):
+                            ec1, ec2 = st.columns(2)
+
+                            # Creative detail
+                            with ec1:
+                                st.markdown("**Creative**")
+                                if c_st == "no_url":
+                                    st.info("No image URL found in tag.")
+                                elif c_st == "error":
+                                    st.error(c.get("error"))
+                                else:
+                                    st.markdown(f"Spec: {c.get('spec','')}")
+                                    for chk in c.get("checks", []):
+                                        icon = "✅" if chk.passed else ("🔧" if chk.fixable else "❌")
+                                        st.markdown(f"{icon} **{chk.name}:** {chk.message}")
+
+                                    if c.get("fixable"):
+                                        fix_key = f"xl_fix_{r['name'][:20].replace(' ','_')}"
+                                        if st.button("Apply fixes & download", key=fix_key, type="primary"):
+                                            with st.spinner("Fixing…"):
+                                                spec_obj = FORMATS[c["spec_key"]]
+                                                c_img_fix = Image.open(io.BytesIO(c["bytes"]))
+                                                fixed_b, new_fmt, applied = apply_fixes(
+                                                    c_img_fix, c["bytes"], c["fmt"], spec_obj, c["checks"]
+                                                )
+                                            if applied:
+                                                st.success(f"Applied: {', '.join(applied)}")
+                                                ext = new_fmt.lower().replace("jpeg", "jpg")
+                                                st.download_button(
+                                                    label=f"⬇️ Download fixed ({len(fixed_b)/1024:.1f} KB)",
+                                                    data=fixed_b,
+                                                    file_name=f"{r['name'][:30]}_fixed.{ext}",
+                                                    mime=f"image/{ext}",
+                                                    key=fix_key + "_dl",
+                                                )
+
+                            # URL / UTM detail
+                            with ec2:
+                                st.markdown("**Click URL & UTMs**")
+                                if u_st == "no_url":
+                                    st.info("No click URL found / URL checking disabled.")
+                                elif u is None:
+                                    st.info("Not checked.")
+                                else:
+                                    if u.resolves:
+                                        st.markdown(f"✅ Resolves (HTTP {u.status_code})")
+                                    else:
+                                        st.markdown(f"❌ Did not resolve{f' (HTTP {u.status_code})' if u.status_code else ''}")
+                                    if u.is_staging:
+                                        st.error("⚠️ Staging URL detected")
+                                    if u.final_url:
+                                        st.caption(f"→ {u.final_url}")
+                                    for utm in REQUIRED_UTMS:
+                                        if utm in u.utm_present:
+                                            st.markdown(f"✅ `{utm}` = `{u.utm_present[utm]}`")
+                                        else:
+                                            st.markdown(f"❌ `{utm}` — **missing**")
+                                    for utm in RECOMMENDED_UTMS:
+                                        if utm in u.utm_present:
+                                            st.markdown(f"✅ `{utm}` = `{u.utm_present[utm]}`")
+                                        else:
+                                            st.markdown(f"⚠️ `{utm}` — not present")
+                                    for note in u.notes:
+                                        st.caption(note)
+
+                            # Collect for bulk feedback
+                            if c_st in ("client", "fixable") or u_st in ("missing_utm", "staging", "error"):
+                                issues_entry = {
+                                    "filename":      r["name"],
+                                    "spec_name":     c.get("spec", "Unknown spec"),
+                                    "client_checks":  c.get("client", []),
+                                    "fixable_checks": c.get("fixable", []),
+                                }
+                                all_xl_issues.append(issues_entry)
+
+                    # Bulk feedback
+                    if all_xl_issues:
+                        st.divider()
+                        with st.expander("📋 Generate client feedback email", expanded=False):
+                            st.caption(
+                                f"Covers **{len(all_xl_issues)} placement{'s' if len(all_xl_issues)!=1 else ''}** with issues."
+                            )
+                            feedback_ui(all_xl_issues, "xl")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SINGLE PASTE MODE
+    # ══════════════════════════════════════════════════════════════════════════
+    else:
+        st.caption(
+            "Paste any ad tag — HTML, iFrame, or CM360. "
+            "The app extracts the creative URL and click URL, downloads and checks the creative "
+            "against carsales specs, and validates UTM parameters."
+        )
+
+        tag_input = st.text_area(
+        "Paste ad tag",
+        height=180,
+        placeholder=(
+            'Paste your tag here, e.g.\n'
+            '<a href="https://example.com/?utm_source=carsales&utm_medium=display&utm_campaign=brand">\n'
+            '  <img src="https://cdn.example.com/banner_728x90.jpg" width="728" height="90" border="0">\n'
+            '</a>'
+        ),
+        key="tag_input",
+    )
+
+    # Clear stale session state when the tag changes
+    if st.session_state.get("_tag_prev") != tag_input:
+        st.session_state["_tag_prev"] = tag_input
+        for _k in ("_tag_creative_bytes", "_tag_creative_fmt", "_tag_url_result"):
+            st.session_state.pop(_k, None)
+
+    if not tag_input.strip():
+        st.info("Paste an ad tag above to begin.")
+    else:
+        parsed = parse_tag(tag_input)
+
+        # ── Tag summary ───────────────────────────────────────────────────────
+        st.divider()
+        tc1, tc2 = st.columns(2)
+        tc1.markdown(f"**Tag type:** {parsed.tag_type}")
+
+        if parsed.declared_width and parsed.declared_height:
+            dims_str = f"{parsed.declared_width}×{parsed.declared_height}px"
+            spec_matches = _DIM_LOOKUP.get((parsed.declared_width, parsed.declared_height), [])
+            if not spec_matches and parsed.declared_width == parsed.declared_height:
+                spec_matches = _DIM_LOOKUP.get("1:1", [])
+            if spec_matches:
+                tc2.markdown(f"**Declared size:** {dims_str} — matches {len(spec_matches)} spec(s)")
+            else:
+                tc2.markdown(f"**Declared size:** {dims_str} — ⚠️ no matching carsales spec")
+        else:
+            tc2.markdown("**Declared size:** not detected")
+
+        for note in parsed.notes:
+            st.warning(note)
+
+        st.divider()
+        creative_col, url_col = st.columns(2)
+
+        # ── Creative column ───────────────────────────────────────────────────
+        with creative_col:
+            st.markdown("#### 🖼 Creative")
+            if parsed.creative_url:
+                st.code(parsed.creative_url, language=None)
+                if st.button("Download & check creative", key="tag_dl_btn", type="primary"):
+                    with st.spinner("Downloading…"):
+                        dl = download_creative(parsed.creative_url)
+                    if dl:
+                        st.session_state["_tag_creative_bytes"] = dl[0]
+                        st.session_state["_tag_creative_fmt"]   = dl[1]
+                    else:
+                        st.error(
+                            "Could not download the creative. "
+                            "The URL may require authentication or is not a direct image link."
+                        )
+                        st.session_state.pop("_tag_creative_bytes", None)
+            else:
+                st.info("No direct image URL found in tag.")
+
+        # ── Click URL column ──────────────────────────────────────────────────
+        with url_col:
+            st.markdown("#### 🔗 Click URL")
+            if parsed.click_url:
+                st.code(parsed.click_url, language=None)
+                if st.button("Check URL & UTMs", key="tag_url_btn", type="primary"):
+                    with st.spinner("Checking URL…"):
+                        url_result = check_url(parsed.click_url)
+                    st.session_state["_tag_url_result"] = url_result
+            else:
+                st.info("No click URL found in tag.")
+
+        # ── Creative check results ────────────────────────────────────────────
+        if "_tag_creative_bytes" in st.session_state:
+            st.divider()
+            st.markdown("### Creative check results")
+
+            tag_bytes = st.session_state["_tag_creative_bytes"]
+            tag_fmt   = st.session_state["_tag_creative_fmt"]
+
+            try:
+                tag_img = Image.open(io.BytesIO(tag_bytes))
+                tag_img.load()
+                img_ok = True
+            except Exception as e:
+                st.error(f"Could not open downloaded file as an image: {e}")
+                img_ok = False
+
+            if img_ok:
+                actual_w, actual_h = tag_img.size
+
+                p1, p2 = st.columns([1, 2])
+                with p1:
+                    st.image(tag_img, use_container_width=True)
+                    st.caption(f"{actual_w}×{actual_h}px · {len(tag_bytes)/1024:.1f} KB · {tag_fmt}")
+                with p2:
+                    # Dimension match warning
+                    if parsed.declared_width and parsed.declared_height:
+                        if (actual_w, actual_h) != (parsed.declared_width, parsed.declared_height):
+                            st.warning(
+                                f"⚠️ Tag declares **{parsed.declared_width}×{parsed.declared_height}px** "
+                                f"but downloaded image is **{actual_w}×{actual_h}px**."
+                            )
+
+                    # Spec selection
+                    tag_matches = _DIM_LOOKUP.get((actual_w, actual_h), [])
+                    if not tag_matches and actual_w == actual_h:
+                        tag_matches = _DIM_LOOKUP.get("1:1", [])
+
+                    if not tag_matches:
+                        st.error(f"Image dimensions {actual_w}×{actual_h}px don't match any carsales spec.")
+                        tag_spec_key = None
+                    elif len(tag_matches) == 1:
+                        tag_spec_key = tag_matches[0]
+                        st.markdown(f"**Matched spec:** {FORMATS[tag_spec_key]['name']}")
+                    else:
+                        tag_spec_key = st.selectbox(
+                            "Multiple specs match — select the correct one:",
+                            tag_matches,
+                            format_func=lambda k: FORMATS[k]["name"],
+                            key="tag_spec_sel",
+                        )
+
+                    if tag_spec_key:
+                        tag_spec   = FORMATS[tag_spec_key]
+                        tag_checks = run_all_checks(tag_img, tag_bytes, tag_fmt, tag_spec)
+                        tag_failed  = [c for c in tag_checks if not c.passed]
+                        tag_fixable = [c for c in tag_failed if c.fixable]
+                        tag_client  = [c for c in tag_failed if c.needs_client]
+
+                        if not tag_failed:
+                            st.success("All checks passed ✓")
+                        elif tag_fixable and not tag_client:
+                            st.warning(f"{len(tag_fixable)} issue(s) — can be auto-fixed below")
+                        else:
+                            st.error(f"{len(tag_failed)} issue(s) — {len(tag_client)} need client revision")
+
+                        for c in tag_checks:
+                            icon = "✅" if c.passed else ("🔧" if c.fixable else "❌")
+                            st.markdown(f"{icon} **{c.name}:** {c.message}")
+
+                        if tag_fixable:
+                            if st.button("Apply fixes & download", key="tag_fix_btn", type="primary"):
+                                with st.spinner("Applying fixes…"):
+                                    fixed_bytes, new_fmt, applied = apply_fixes(
+                                        tag_img.copy(), tag_bytes, tag_fmt, tag_spec, tag_checks
+                                    )
+                                if applied:
+                                    st.success(f"Applied: {', '.join(applied)}")
+                                    final_kb = len(fixed_bytes) / 1024
+                                    ext = new_fmt.lower().replace("jpeg", "jpg")
+                                    fname = parsed.creative_url.rsplit("/", 1)[-1].split("?")[0] or "creative"
+                                    base  = os.path.splitext(fname)[0]
+                                    st.download_button(
+                                        label=f"⬇️  Download fixed  ({final_kb:.1f} KB)",
+                                        data=fixed_bytes,
+                                        file_name=f"{base}_fixed.{ext}",
+                                        mime=f"image/{ext}",
+                                        key="tag_dl_fixed",
+                                    )
+
+                        # Feedback email
+                        if tag_failed:
+                            st.divider()
+                            with st.expander("📋 Generate client feedback email", expanded=False):
+                                fname_display = (
+                                    parsed.creative_url.rsplit("/", 1)[-1].split("?")[0]
+                                    or "creative"
+                                )
+                                feedback_ui([{
+                                    "filename":      fname_display,
+                                    "spec_name":     tag_spec["name"],
+                                    "client_checks":  tag_client,
+                                    "fixable_checks": tag_fixable,
+                                }], "tag")
+
+        # ── Click URL / UTM results ───────────────────────────────────────────
+        if "_tag_url_result" in st.session_state:
+            st.divider()
+            st.markdown("### Click URL & UTM results")
+            ur = st.session_state["_tag_url_result"]
+
+            # Resolution
+            if ur.resolves:
+                st.success(f"URL resolves ✓  (HTTP {ur.status_code})")
+            else:
+                msg = f"HTTP {ur.status_code}" if ur.status_code else "no response"
+                st.error(f"URL did not resolve — {msg}")
+
+            if ur.final_url:
+                st.caption(f"Redirected to: {ur.final_url}")
+
+            if ur.is_staging:
+                st.error("⚠️ Staging/dev URL detected — this must point to the live production site before going live.")
+
+            for note in ur.notes:
+                st.warning(note)
+
+            st.markdown("**UTM parameters**")
+
+            # Required UTMs
+            for utm in REQUIRED_UTMS:
+                if utm in ur.utm_present:
+                    st.markdown(f"✅ `{utm}` = `{ur.utm_present[utm]}`")
+                else:
+                    st.markdown(f"❌ `{utm}` — **missing** (required)")
+
+            # Recommended UTMs
+            for utm in RECOMMENDED_UTMS:
+                if utm in ur.utm_present:
+                    st.markdown(f"✅ `{utm}` = `{ur.utm_present[utm]}`")
+                else:
+                    st.markdown(f"⚠️ `{utm}` — not present (recommended)")
+
+            # Any extra UTMs
+            extra = {k: v for k, v in ur.utm_present.items()
+                     if k not in REQUIRED_UTMS and k not in RECOMMENDED_UTMS}
+            for k, v in extra.items():
+                st.markdown(f"ℹ️ `{k}` = `{v}`")
+
+            # Overall UTM verdict
+            if not ur.utm_missing:
+                st.success("All required UTM parameters present ✓")
+            else:
+                missing_str = ", ".join(f"`{u}`" for u in ur.utm_missing)
+                st.error(f"Missing required UTMs: {missing_str} — ask the client to add these to the click URL.")

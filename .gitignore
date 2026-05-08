@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+
+# Streamlit secrets (API keys — never commit these)
+.streamlit/secrets.toml
+
+# Local-only files
+launch.bat
+car.ico

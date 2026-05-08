@@ -1,0 +1,6 @@
+[theme]
+primaryColor             = "#1E90FF"   # Dodger Blue — carsales primary
+backgroundColor          = "#F2F5F7"   # White Smoke — off-white, not pure white
+secondaryBackgroundColor = "#E2EAF0"   # light blue-grey for panels / widgets
+textColor                = "#33373D"   # Jet — default body text
+font                     = "sans serif"
