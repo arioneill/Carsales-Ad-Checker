@@ -180,32 +180,90 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Dark mode state ───────────────────────────────────────────────────────────
+if "dark_mode" not in st.session_state:
+    st.session_state.dark_mode = False
+
+# ── API key from secrets only (silent — no UI input) ─────────────────────────
+api_key = ""
+try:
+    api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+except Exception:
+    pass
+
 # ── Brand styles ──────────────────────────────────────────────────────────────
+_DARK = st.session_state.dark_mode
+
+_MAIN_BG      = "#0A1628" if _DARK else "#F2F5F7"
+_SECONDARY_BG = "#102040" if _DARK else "#E2EAF0"
+_TEXT         = "#D8E4F0" if _DARK else "#33373D"
+_SIDEBAR_BG   = "#060E1A" if _DARK else "#01295F"
+_H_COLOR      = "#66CBE1" if _DARK else "#01295F"
+_HR_COLOR     = "#1E3A5F" if _DARK else "#C8D8E8"
+_INPUT_BG     = "#0D2540" if _DARK else "#02306B"
+
 st.markdown(
-    """
+    f"""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&display=swap');
 
-    html, body, [class*="css"], .stMarkdown, .stText, button, input, textarea, select {
+    html, body, [class*="css"], .stMarkdown, .stText, button, input, textarea, select {{
         font-family: 'Manrope', sans-serif !important;
-    }
+    }}
 
-    [data-testid="stSidebar"] { background-color: #01295F !important; }
+    /* ── Main background ── */
+    .stApp, [data-testid="stAppViewContainer"],
+    [data-testid="stMain"], section.main {{
+        background-color: {_MAIN_BG} !important;
+    }}
+
+    /* ── Body text ── */
+    p, li, span, label, div.stMarkdown, .stText,
+    [data-testid="stMarkdownContainer"] p {{
+        color: {_TEXT} !important;
+    }}
+
+    /* ── Headings ── */
+    h1 {{ color: {_H_COLOR} !important; font-weight: 800 !important; }}
+    h2, h3 {{ color: {_H_COLOR} !important; font-weight: 700 !important; }}
+
+    /* ── Expanders & metric cards ── */
+    [data-testid="stExpander"] {{
+        background-color: {_SECONDARY_BG} !important;
+        border-color: {_HR_COLOR} !important;
+    }}
+    [data-testid="metric-container"] {{
+        background-color: {_SECONDARY_BG} !important;
+        border-radius: 8px;
+    }}
+
+    /* ── Input fields in main area ── */
+    [data-testid="stMain"] input,
+    [data-testid="stMain"] textarea,
+    [data-testid="stMain"] select {{
+        background-color: {_SECONDARY_BG} !important;
+        color: {_TEXT} !important;
+        border-color: {_HR_COLOR} !important;
+    }}
+
+    /* ── Sidebar ── */
+    [data-testid="stSidebar"] {{ background-color: {_SIDEBAR_BG} !important; }}
     [data-testid="stSidebar"],
     [data-testid="stSidebar"] p,
     [data-testid="stSidebar"] span,
     [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] .stMarkdown { color: #FFFFFF !important; }
-    [data-testid="stSidebar"] a { color: #66CBE1 !important; }
-    [data-testid="stSidebar"] hr { border-color: rgba(255,255,255,0.2) !important; }
-    [data-testid="stSidebar"] input {
-        background-color: #02306B !important;
+    [data-testid="stSidebar"] li,
+    [data-testid="stSidebar"] .stMarkdown {{ color: #FFFFFF !important; }}
+    [data-testid="stSidebar"] a {{ color: #66CBE1 !important; }}
+    [data-testid="stSidebar"] hr {{ border-color: rgba(255,255,255,0.15) !important; }}
+    [data-testid="stSidebar"] input {{
+        background-color: {_INPUT_BG} !important;
         color: #FFFFFF !important;
-        border-color: rgba(255,255,255,0.3) !important;
-    }
-    [data-testid="stSidebar"] .stTextInput label { color: #FFFFFF !important; }
+        border-color: rgba(255,255,255,0.2) !important;
+    }}
 
-    [data-testid="stAppViewContainer"]::before {
+    /* ── Top accent bar ── */
+    [data-testid="stAppViewContainer"]::before {{
         content: "";
         display: block;
         height: 5px;
@@ -213,20 +271,25 @@ st.markdown(
         position: fixed;
         top: 0; left: 0; right: 0;
         z-index: 9999;
-    }
+    }}
 
-    h1 { color: #01295F !important; font-weight: 800 !important; }
-    h2, h3 { color: #01295F !important; font-weight: 700 !important; }
+    /* ── Metric values ── */
+    [data-testid="stMetricValue"] {{ color: #1E90FF !important; font-weight: 700 !important; }}
 
-    [data-testid="stMetricValue"] { color: #1E90FF !important; font-weight: 700 !important; }
-
-    button[role="tab"][aria-selected="true"] {
+    /* ── Active tab ── */
+    button[role="tab"][aria-selected="true"] {{
         color: #1E90FF !important;
         border-bottom: 3px solid #1E90FF !important;
         font-weight: 700 !important;
-    }
+    }}
 
-    hr { border-color: #C8D8E8 !important; }
+    /* ── Dividers ── */
+    hr {{ border-color: {_HR_COLOR} !important; }}
+
+    /* ── Code blocks ── */
+    [data-testid="stCode"] {{
+        background-color: {_SECONDARY_BG} !important;
+    }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -234,6 +297,7 @@ st.markdown(
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
+    # Logo
     try:
         st.image(
             "https://business.carsales.com.au/wp-content/uploads/2024/02/Carsales-Business_reversed-horizontal.svg",
@@ -245,30 +309,47 @@ with st.sidebar:
             '<span style="color:#1E90FF;">carsales</span> mediahouse</p>',
             unsafe_allow_html=True,
         )
+
     st.markdown("<br>", unsafe_allow_html=True)
 
-    st.markdown("## Settings")
-    # Pre-populate from Streamlit Cloud secrets if available
-    _preset_key = ""
-    try:
-        _preset_key = st.secrets.get("ANTHROPIC_API_KEY", "")
-    except Exception:
-        pass
-    api_key = st.text_input(
-        "Anthropic API Key (optional)",
-        value=_preset_key,
-        type="password",
-        help="Enables AI visual checks: branding presence, competitor references, all-caps text, and card clear-zone detection.",
-        placeholder="sk-ant-...",
-    )
+    # Dark / light mode toggle
+    st.toggle("🌙 Dark mode", key="dark_mode")
+
     st.markdown("---")
-    st.markdown(
-        "**AI checks** (when key provided):\n"
-        "- ✅ Branding visible\n"
-        "- ✅ No competitor references\n"
-        "- ✅ No prohibited all-caps text\n"
-        "- ✅ Clear zone clear (Card only)"
-    )
+
+    # How to use guide
+    st.markdown("### How to use")
+
+    st.markdown("""
+**📄 Single file**
+Select a format group and size, upload one creative. Issues are flagged instantly with auto-fix where possible.
+
+---
+
+**📂 Multi-file**
+Upload several files at once — each is automatically matched to its spec by pixel dimensions. No zipping needed.
+
+---
+
+**📦 ZIP bundle**
+Upload a client ZIP to see which formats are present, which have issues, and which are missing from the set.
+
+---
+
+**🏷 Ad Tag**
+Paste an HTML or CM360 tag, or upload a client Excel sheet of tags. Checks the creative and validates UTM parameters on the click URL.
+
+---
+
+**🔧 Auto-fix**
+Files marked with 🔧 can be corrected automatically — resize, convert format, compress, or add a 1px border. Download the fixed file instantly.
+
+---
+
+**📋 Client email**
+After checking, click *Generate client feedback email* to produce a ready-to-send message listing exactly what needs to be fixed.
+""")
+
     st.markdown("---")
     st.caption("Specs: [carsales.com.au/ad-specs](https://business.carsales.com.au/ad-specs/) · Jan 2026")
 
@@ -457,11 +538,6 @@ with tab1:
                     icon = "✅" if r.passed else "❌"
                     conf = f" *(confidence: {r.confidence})*" if r.confidence != "high" else ""
                     st.markdown(f"{icon} &nbsp; **{r.name}:** {r.message}{conf}")
-            elif not api_key:
-                st.info(
-                    "💡 Add your Anthropic API key in the sidebar to enable AI visual checks "
-                    "(branding, competitor references, text casing, clear zone)."
-                )
 
             st.divider()
 
@@ -506,12 +582,11 @@ with tab1:
                     st.markdown(f"• **{r['name']}:** {r['message']}")
 
             # Clear zone reminder
-            if spec.get("clear_zone_top_px") and not api_key:
+            if spec.get("clear_zone_top_px") and not ai_results:
                 st.divider()
                 st.warning(
                     f"⚠️  **Clear zone reminder:** The top **{spec['clear_zone_top_px']}px** of this "
-                    "carsales Card image must contain no copy or logos. "
-                    "Add an Anthropic API key to check this automatically."
+                    "carsales Card image must contain no copy or logos."
                 )
 
             # ── Client feedback email ─────────────────────────────────────────
