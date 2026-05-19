@@ -930,9 +930,10 @@ with tab4:
     # ══════════════════════════════════════════════════════════════════════════
     if tag_mode == "Upload Excel file":
         st.caption(
-            "Upload the client's Excel trafficking sheet. "
-            "Reads **col F** (Placement ID), **col I** (Name), **col K** (Dimensions), "
-            "**col R** (Impression tag) and **col V** (Click tag) by default."
+            "Upload the CM360 trafficking sheet (.xls or .xlsx). "
+            "The app auto-detects the header row and reads "
+            "**Placement ID**, **Placement Name**, **Dimensions**, "
+            "**Impression Tag (image)** and **Click Tag** automatically."
         )
 
         xl_file = st.file_uploader("Upload Excel file (.xlsx or .xls)", type=["xlsx", "xls"], key="xl_upload")
@@ -942,27 +943,32 @@ with tab4:
         else:
             import pandas as pd
 
-            # ── Options ───────────────────────────────────────────────────────
-            opt1, opt2 = st.columns([1, 2])
-            with opt1:
-                skip_rows = st.number_input(
-                    "Extra header rows to skip",
-                    min_value=0, max_value=20, value=0, step=1,
-                    help="Some trafficking sheets have 1–3 rows of metadata above the real header row.",
-                    key="xl_skip",
-                )
-            with opt2:
-                check_urls_toggle = st.checkbox(
-                    "Check click URLs & UTMs (makes a network request per row — slower)",
-                    value=True,
-                    key="xl_check_urls",
-                )
+            file_bytes = xl_file.read()
+            xl_ok = False
+            header_row_idx = 0
+            df = None
+
+            # ── Clear overrides when a new file is uploaded ───────────────────
+            if st.session_state.get("_xl_file_id") != xl_file.name:
+                for _k in ["xl_col_f", "xl_col_i", "xl_col_k", "xl_col_r", "xl_col_v",
+                           "_xl_results", "_xl_file_id"]:
+                    st.session_state.pop(_k, None)
 
             try:
+                # Scan the first 25 rows (no header) to find the real header row.
+                # CM360 exports have ~10 rows of metadata before the column headers.
+                raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=0, header=None, dtype=str)
+                for ri in range(min(25, len(raw))):
+                    row_vals = raw.iloc[ri].fillna("").astype(str).str.lower().tolist()
+                    if any("placement id" in v or "click tag" in v or "impression tag" in v
+                           for v in row_vals):
+                        header_row_idx = ri
+                        break
+
                 df = pd.read_excel(
-                    io.BytesIO(xl_file.read()),
+                    io.BytesIO(file_bytes),
                     sheet_name=0,
-                    skiprows=int(skip_rows),
+                    skiprows=header_row_idx,
                     header=0,
                     dtype=str,
                 )
@@ -970,40 +976,73 @@ with tab4:
                 xl_ok = True
             except Exception as e:
                 st.error(f"Could not read Excel file: {e}")
-                xl_ok = False
 
-            if xl_ok:
+            if xl_ok and df is not None:
                 n_cols = len(df.columns)
-                st.caption(f"{len(df)} rows · {n_cols} columns · Sheet 1")
 
-                # ── Column position overrides (1-based, like Excel) ───────────
-                with st.expander("📐 Adjust column positions  (only if your file uses different columns)", expanded=False):
-                    st.caption("Default positions match the standard carsales trafficking sheet: F=6, I=9, K=11, R=18, V=22.")
+                # ── Auto-detect column positions by header name ───────────────
+                def _find_col(keywords: list[str], default_pos: int) -> int:
+                    for kw in keywords:
+                        for ci, col in enumerate(df.columns):
+                            if kw.lower() in str(col).lower():
+                                return ci
+                    return min(default_pos, n_cols - 1)
+
+                auto_f = _find_col(["placement id"],                  5)
+                auto_i = _find_col(["placement name"],                8)
+                auto_k = _find_col(["dimensions"],                    10)
+                auto_r = _find_col(["impression tag (image)"],        17)
+                auto_v = _find_col(["click tag"],                     21)
+
+                # ── Info strip ────────────────────────────────────────────────
+                st.caption(
+                    f"{len(df)} placements · {n_cols} columns · "
+                    f"Header detected at row {header_row_idx + 1}"
+                )
+                det_names = {
+                    "F · Placement ID":      str(df.columns[auto_f]),
+                    "I · Name":              str(df.columns[auto_i]),
+                    "K · Dimensions":        str(df.columns[auto_k]),
+                    "R · Impression tag":    str(df.columns[auto_r]),
+                    "V · Click tag":         str(df.columns[auto_v]),
+                }
+                st.markdown(
+                    "  ·  ".join(f"**{role}** → *{name}*" for role, name in det_names.items())
+                )
+
+                check_urls_toggle = st.checkbox(
+                    "Check click URLs & UTMs (makes a network request per row — slower)",
+                    value=True,
+                    key="xl_check_urls",
+                )
+
+                # ── Column override (only needed if auto-detection was wrong) ─
+                with st.expander("📐 Override column positions", expanded=False):
+                    st.caption("Numbers are 1-based (A=1, B=2 …). Pre-filled with auto-detected values.")
                     ca, cb, cc, cd, ce = st.columns(5)
-                    col_f = ca.number_input("F · Placement ID", min_value=1, max_value=n_cols, value=min(6,  n_cols), step=1, key="xl_col_f")
-                    col_i = cb.number_input("I · Name",         min_value=1, max_value=n_cols, value=min(9,  n_cols), step=1, key="xl_col_i")
-                    col_k = cc.number_input("K · Dimensions",   min_value=1, max_value=n_cols, value=min(11, n_cols), step=1, key="xl_col_k")
-                    col_r = cd.number_input("R · Impression tag", min_value=1, max_value=n_cols, value=min(18, n_cols), step=1, key="xl_col_r")
-                    col_v = ce.number_input("V · Click tag",    min_value=1, max_value=n_cols, value=min(22, n_cols), step=1, key="xl_col_v")
+                    col_f = ca.number_input("F · Placement ID",   min_value=1, max_value=n_cols, value=auto_f + 1, step=1, key="xl_col_f")
+                    col_i = cb.number_input("I · Name",           min_value=1, max_value=n_cols, value=auto_i + 1, step=1, key="xl_col_i")
+                    col_k = cc.number_input("K · Dimensions",     min_value=1, max_value=n_cols, value=auto_k + 1, step=1, key="xl_col_k")
+                    col_r = cd.number_input("R · Impression tag", min_value=1, max_value=n_cols, value=auto_r + 1, step=1, key="xl_col_r")
+                    col_v = ce.number_input("V · Click tag",      min_value=1, max_value=n_cols, value=auto_v + 1, step=1, key="xl_col_v")
 
-                # Convert to 0-based indices
                 idx_f = int(col_f) - 1
                 idx_i = int(col_i) - 1
                 idx_k = int(col_k) - 1
                 idx_r = int(col_r) - 1
                 idx_v = int(col_v) - 1
 
-                # ── Preview — show just the 5 relevant columns ────────────────
+                # ── Preview ───────────────────────────────────────────────────
                 with st.expander("Preview first 5 rows", expanded=False):
                     valid_idxs = [ix for ix in [idx_f, idx_i, idx_k, idx_r, idx_v] if ix < n_cols]
                     preview_df = df.iloc[:5, valid_idxs].copy()
                     preview_df.columns = [
                         lbl for lbl, ix in [
-                            ("F · Placement ID", idx_f),
-                            ("I · Name",         idx_i),
-                            ("K · Dimensions",   idx_k),
+                            ("F · Placement ID",   idx_f),
+                            ("I · Name",           idx_i),
+                            ("K · Dimensions",     idx_k),
                             ("R · Impression tag", idx_r),
-                            ("V · Click tag",    idx_v),
+                            ("V · Click tag",      idx_v),
                         ] if ix < n_cols
                     ]
                     st.dataframe(preview_df, use_container_width=True)
@@ -1044,20 +1083,25 @@ with tab4:
                             continue
 
                         # ── Spec matching from col K dimensions ───────────────
-                        k_spec_key  = None
-                        k_spec_name = None
-                        k_dims      = None
+                        k_spec_key       = None
+                        k_spec_name      = None
+                        k_dims           = None
+                        is_tracking_pixel = False
                         if dimensions_str:
                             dm = re.search(r'(\d+)\s*[xX×*]\s*(\d+)', dimensions_str)
                             if dm:
                                 kw, kh = int(dm.group(1)), int(dm.group(2))
                                 k_dims = (kw, kh)
-                                k_matches = _DIM_LOOKUP.get((kw, kh), [])
-                                if not k_matches and kw == kh:
-                                    k_matches = _DIM_LOOKUP.get("1:1", [])
-                                if k_matches:
-                                    k_spec_key  = k_matches[0]
-                                    k_spec_name = FORMATS[k_spec_key]["name"]
+                                # 1×1 is a CM360 impression-tracking pixel, not a creative
+                                if kw == 1 and kh == 1:
+                                    is_tracking_pixel = True
+                                else:
+                                    k_matches = _DIM_LOOKUP.get((kw, kh), [])
+                                    if not k_matches and kw == kh:
+                                        k_matches = _DIM_LOOKUP.get("1:1", [])
+                                    if k_matches:
+                                        k_spec_key  = k_matches[0]
+                                        k_spec_name = FORMATS[k_spec_key]["name"]
 
                         # ── Parse impression tag (col R) ──────────────────────
                         parsed = parse_tag(impression_tag) if impression_tag else None
@@ -1077,7 +1121,15 @@ with tab4:
                         creative_summary = None
                         creative_url = parsed.creative_url if parsed else None
 
-                        if creative_url:
+                        if is_tracking_pixel:
+                            # 1×1 impression pixels are purely for tracking — no creative to check
+                            creative_summary = {
+                                "tracking_pixel": True,
+                                "dims":   "1×1px",
+                                "spec":   "Tracking pixel",
+                                "checks": [], "failed": [], "fixable": [], "client": [],
+                            }
+                        elif creative_url:
                             dl = download_creative(creative_url)
                             if dl:
                                 try:
@@ -1173,12 +1225,13 @@ with tab4:
 
                     def _creative_status(r):
                         c = r.get("creative")
-                        if c is None:                return "no_url"
-                        if "error" in c:             return "error"
-                        if c.get("js_note"):         return "js_tag"
-                        if c.get("dims_only"):       return "dims_only"
-                        if c.get("client"):          return "client"
-                        if c.get("fixable"):         return "fixable"
+                        if c is None:                    return "no_url"
+                        if "error" in c:                 return "error"
+                        if c.get("tracking_pixel"):      return "tracking_pixel"
+                        if c.get("js_note"):             return "js_tag"
+                        if c.get("dims_only"):           return "dims_only"
+                        if c.get("client"):              return "client"
+                        if c.get("fixable"):             return "fixable"
                         return "pass"
 
                     def _url_status(r):
@@ -1206,7 +1259,7 @@ with tab4:
                         c_st = _creative_status(r)
                         u_st = _url_status(r)
 
-                        if c_st in ("pass", "dims_only", "js_tag") and u_st in ("pass", "no_url"):
+                        if c_st in ("pass", "dims_only", "js_tag", "tracking_pixel") and u_st in ("pass", "no_url"):
                             row_icon = "✅"
                         elif c_st == "client" or u_st in ("error", "staging"):
                             row_icon = "❌"
@@ -1219,13 +1272,14 @@ with tab4:
                         pid_str = f"  ·  ID {r['placement_id']}" if r.get("placement_id") else ""
 
                         c_label = {
-                            "pass":      f"Creative ✅ {c.get('dims','')}",
-                            "fixable":   f"Creative 🔧 {c.get('dims','')} — fixable",
-                            "client":    f"Creative ❌ {c.get('dims','')} — needs revision",
-                            "error":     f"Creative ⚠️ — {c.get('error','')}",
-                            "js_tag":    f"Creative ℹ️ JS tag  ({c.get('dims','')})".rstrip(" ()"),
-                            "dims_only": f"Creative ℹ️ {c.get('dims','')} — no static URL",
-                            "no_url":    "Creative — no URL in tag",
+                            "pass":           f"Creative ✅ {c.get('dims','')}",
+                            "fixable":        f"Creative 🔧 {c.get('dims','')} — fixable",
+                            "client":         f"Creative ❌ {c.get('dims','')} — needs revision",
+                            "error":          f"Creative ⚠️ — {c.get('error','')}",
+                            "js_tag":         f"Creative ℹ️ JS tag ({c.get('dims','')})".rstrip(" ()"),
+                            "dims_only":      f"Creative ℹ️ {c.get('dims','')} — no static URL",
+                            "tracking_pixel": "1×1 tracking pixel",
+                            "no_url":         "Creative — no URL in tag",
                         }.get(c_st, "")
 
                         u_label = {
@@ -1249,7 +1303,12 @@ with tab4:
                             # ── Creative (col R) ──────────────────────────────
                             with ec1:
                                 st.markdown("**Impression tag (col R)**")
-                                if c_st == "no_url":
+                                if c_st == "tracking_pixel":
+                                    st.info(
+                                        "1×1 CM360 impression-tracking pixel — no creative to check. "
+                                        "The actual ad creative is served by the platform separately."
+                                    )
+                                elif c_st == "no_url":
                                     st.info("No image URL found in impression tag.")
                                 elif c_st == "js_tag":
                                     st.info(c.get("js_note", "JS-rendered tag — no static image URL to download."))
