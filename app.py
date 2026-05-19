@@ -1406,234 +1406,229 @@ with tab4:
         )
 
         tag_input = st.text_area(
-        "Paste ad tag",
-        height=180,
-        placeholder=(
-            'Paste your tag here, e.g.\n'
-            '<a href="https://example.com/?utm_source=carsales&utm_medium=display&utm_campaign=brand">\n'
-            '  <img src="https://cdn.example.com/banner_728x90.jpg" width="728" height="90" border="0">\n'
-            '</a>'
-        ),
-        key="tag_input",
-    )
+            "Paste ad tag",
+            height=180,
+            placeholder=(
+                'Paste your tag here, e.g.\n'
+                '<a href="https://example.com/?utm_source=carsales&utm_medium=display&utm_campaign=brand">\n'
+                '  <img src="https://cdn.example.com/banner_728x90.jpg" width="728" height="90" border="0">\n'
+                '</a>'
+            ),
+            key="tag_input",
+        )
 
-    # Clear stale session state when the tag changes
-    if st.session_state.get("_tag_prev") != tag_input:
-        st.session_state["_tag_prev"] = tag_input
-        for _k in ("_tag_creative_bytes", "_tag_creative_fmt", "_tag_url_result"):
-            st.session_state.pop(_k, None)
+        # Clear stale session state when the tag changes
+        if st.session_state.get("_tag_prev") != tag_input:
+            st.session_state["_tag_prev"] = tag_input
+            for _k in ("_tag_creative_bytes", "_tag_creative_fmt", "_tag_url_result"):
+                st.session_state.pop(_k, None)
 
-    if not tag_input.strip():
-        st.info("Paste an ad tag above to begin.")
-    else:
-        parsed = parse_tag(tag_input)
-
-        # ── Tag summary ───────────────────────────────────────────────────────
-        st.divider()
-        tc1, tc2 = st.columns(2)
-        tc1.markdown(f"**Tag type:** {parsed.tag_type}")
-
-        if parsed.declared_width and parsed.declared_height:
-            dims_str = f"{parsed.declared_width}×{parsed.declared_height}px"
-            spec_matches = _DIM_LOOKUP.get((parsed.declared_width, parsed.declared_height), [])
-            if not spec_matches and parsed.declared_width == parsed.declared_height:
-                spec_matches = _DIM_LOOKUP.get("1:1", [])
-            if spec_matches:
-                tc2.markdown(f"**Declared size:** {dims_str} — matches {len(spec_matches)} spec(s)")
-            else:
-                tc2.markdown(f"**Declared size:** {dims_str} — ⚠️ no matching carsales spec")
+        if not tag_input.strip():
+            st.info("Paste an ad tag above to begin.")
         else:
-            tc2.markdown("**Declared size:** not detected")
+            parsed = parse_tag(tag_input)
 
-        for note in parsed.notes:
-            st.warning(note)
-
-        st.divider()
-        creative_col, url_col = st.columns(2)
-
-        # ── Creative column ───────────────────────────────────────────────────
-        with creative_col:
-            st.markdown("#### 🖼 Creative")
-            if parsed.creative_url:
-                st.code(parsed.creative_url, language=None)
-                if st.button("Download & check creative", key="tag_dl_btn", type="primary"):
-                    with st.spinner("Downloading…"):
-                        dl = download_creative(parsed.creative_url)
-                    if dl:
-                        st.session_state["_tag_creative_bytes"] = dl[0]
-                        st.session_state["_tag_creative_fmt"]   = dl[1]
-                    else:
-                        st.error(
-                            "Could not download the creative. "
-                            "The URL may require authentication or is not a direct image link."
-                        )
-                        st.session_state.pop("_tag_creative_bytes", None)
-            else:
-                st.info("No direct image URL found in tag.")
-
-        # ── Click URL column ──────────────────────────────────────────────────
-        with url_col:
-            st.markdown("#### 🔗 Click URL")
-            if parsed.click_url:
-                st.code(parsed.click_url, language=None)
-                if st.button("Check URL & UTMs", key="tag_url_btn", type="primary"):
-                    with st.spinner("Checking URL…"):
-                        url_result = check_url(parsed.click_url)
-                    st.session_state["_tag_url_result"] = url_result
-            else:
-                st.info("No click URL found in tag.")
-
-        # ── Creative check results ────────────────────────────────────────────
-        if "_tag_creative_bytes" in st.session_state:
+            # ── Tag summary ───────────────────────────────────────────────────
             st.divider()
-            st.markdown("### Creative check results")
+            tc1, tc2 = st.columns(2)
+            tc1.markdown(f"**Tag type:** {parsed.tag_type}")
 
-            tag_bytes = st.session_state["_tag_creative_bytes"]
-            tag_fmt   = st.session_state["_tag_creative_fmt"]
-
-            try:
-                tag_img = Image.open(io.BytesIO(tag_bytes))
-                tag_img.load()
-                img_ok = True
-            except Exception as e:
-                st.error(f"Could not open downloaded file as an image: {e}")
-                img_ok = False
-
-            if img_ok:
-                actual_w, actual_h = tag_img.size
-
-                p1, p2 = st.columns([1, 2])
-                with p1:
-                    st.image(tag_img, use_container_width=True)
-                    st.caption(f"{actual_w}×{actual_h}px · {len(tag_bytes)/1024:.1f} KB · {tag_fmt}")
-                with p2:
-                    # Dimension match warning
-                    if parsed.declared_width and parsed.declared_height:
-                        if (actual_w, actual_h) != (parsed.declared_width, parsed.declared_height):
-                            st.warning(
-                                f"⚠️ Tag declares **{parsed.declared_width}×{parsed.declared_height}px** "
-                                f"but downloaded image is **{actual_w}×{actual_h}px**."
-                            )
-
-                    # Spec selection
-                    tag_matches = _DIM_LOOKUP.get((actual_w, actual_h), [])
-                    if not tag_matches and actual_w == actual_h:
-                        tag_matches = _DIM_LOOKUP.get("1:1", [])
-
-                    if not tag_matches:
-                        st.error(f"Image dimensions {actual_w}×{actual_h}px don't match any carsales spec.")
-                        tag_spec_key = None
-                    elif len(tag_matches) == 1:
-                        tag_spec_key = tag_matches[0]
-                        st.markdown(f"**Matched spec:** {FORMATS[tag_spec_key]['name']}")
-                    else:
-                        tag_spec_key = st.selectbox(
-                            "Multiple specs match — select the correct one:",
-                            tag_matches,
-                            format_func=lambda k: FORMATS[k]["name"],
-                            key="tag_spec_sel",
-                        )
-
-                    if tag_spec_key:
-                        tag_spec   = FORMATS[tag_spec_key]
-                        tag_checks = run_all_checks(tag_img, tag_bytes, tag_fmt, tag_spec)
-                        tag_failed  = [c for c in tag_checks if not c.passed]
-                        tag_fixable = [c for c in tag_failed if c.fixable]
-                        tag_client  = [c for c in tag_failed if c.needs_client]
-
-                        if not tag_failed:
-                            st.success("All checks passed ✓")
-                        elif tag_fixable and not tag_client:
-                            st.warning(f"{len(tag_fixable)} issue(s) — can be auto-fixed below")
-                        else:
-                            st.error(f"{len(tag_failed)} issue(s) — {len(tag_client)} need client revision")
-
-                        for c in tag_checks:
-                            icon = "✅" if c.passed else ("🔧" if c.fixable else "❌")
-                            st.markdown(f"{icon} **{c.name}:** {c.message}")
-
-                        if tag_fixable:
-                            if st.button("Apply fixes & download", key="tag_fix_btn", type="primary"):
-                                with st.spinner("Applying fixes…"):
-                                    fixed_bytes, new_fmt, applied = apply_fixes(
-                                        tag_img.copy(), tag_bytes, tag_fmt, tag_spec, tag_checks
-                                    )
-                                if applied:
-                                    st.success(f"Applied: {', '.join(applied)}")
-                                    final_kb = len(fixed_bytes) / 1024
-                                    ext = new_fmt.lower().replace("jpeg", "jpg")
-                                    fname = parsed.creative_url.rsplit("/", 1)[-1].split("?")[0] or "creative"
-                                    base  = os.path.splitext(fname)[0]
-                                    st.download_button(
-                                        label=f"⬇️  Download fixed  ({final_kb:.1f} KB)",
-                                        data=fixed_bytes,
-                                        file_name=f"{base}_fixed.{ext}",
-                                        mime=f"image/{ext}",
-                                        key="tag_dl_fixed",
-                                    )
-
-                        # Feedback email
-                        if tag_failed:
-                            st.divider()
-                            with st.expander("📋 Generate client feedback email", expanded=False):
-                                fname_display = (
-                                    parsed.creative_url.rsplit("/", 1)[-1].split("?")[0]
-                                    or "creative"
-                                )
-                                feedback_ui([{
-                                    "filename":      fname_display,
-                                    "spec_name":     tag_spec["name"],
-                                    "client_checks":  tag_client,
-                                    "fixable_checks": tag_fixable,
-                                }], "tag")
-
-        # ── Click URL / UTM results ───────────────────────────────────────────
-        if "_tag_url_result" in st.session_state:
-            st.divider()
-            st.markdown("### Click URL & UTM results")
-            ur = st.session_state["_tag_url_result"]
-
-            # Resolution
-            if ur.resolves:
-                st.success(f"URL resolves ✓  (HTTP {ur.status_code})")
+            if parsed.declared_width and parsed.declared_height:
+                dims_str = f"{parsed.declared_width}×{parsed.declared_height}px"
+                spec_matches = _DIM_LOOKUP.get((parsed.declared_width, parsed.declared_height), [])
+                if not spec_matches and parsed.declared_width == parsed.declared_height:
+                    spec_matches = _DIM_LOOKUP.get("1:1", [])
+                if spec_matches:
+                    tc2.markdown(f"**Declared size:** {dims_str} — matches {len(spec_matches)} spec(s)")
+                else:
+                    tc2.markdown(f"**Declared size:** {dims_str} — ⚠️ no matching carsales spec")
             else:
-                msg = f"HTTP {ur.status_code}" if ur.status_code else "no response"
-                st.error(f"URL did not resolve — {msg}")
+                tc2.markdown("**Declared size:** not detected")
 
-            if ur.final_url:
-                st.caption(f"Redirected to: {ur.final_url}")
-
-            if ur.is_staging:
-                st.error("⚠️ Staging/dev URL detected — this must point to the live production site before going live.")
-
-            for note in ur.notes:
+            for note in parsed.notes:
                 st.warning(note)
 
-            st.markdown("**UTM parameters**")
+            st.divider()
+            creative_col, url_col = st.columns(2)
 
-            # Required UTMs
-            for utm in REQUIRED_UTMS:
-                if utm in ur.utm_present:
-                    st.markdown(f"✅ `{utm}` = `{ur.utm_present[utm]}`")
+            # ── Creative column ───────────────────────────────────────────────
+            with creative_col:
+                st.markdown("#### 🖼 Creative")
+                if parsed.creative_url:
+                    st.code(parsed.creative_url, language=None)
+                    if st.button("Download & check creative", key="tag_dl_btn", type="primary"):
+                        with st.spinner("Downloading…"):
+                            dl = download_creative(parsed.creative_url)
+                        if dl:
+                            st.session_state["_tag_creative_bytes"] = dl[0]
+                            st.session_state["_tag_creative_fmt"]   = dl[1]
+                        else:
+                            st.error(
+                                "Could not download the creative. "
+                                "The URL may require authentication or is not a direct image link."
+                            )
+                            st.session_state.pop("_tag_creative_bytes", None)
                 else:
-                    st.markdown(f"❌ `{utm}` — **missing** (required)")
+                    st.info("No direct image URL found in tag.")
 
-            # Recommended UTMs
-            for utm in RECOMMENDED_UTMS:
-                if utm in ur.utm_present:
-                    st.markdown(f"✅ `{utm}` = `{ur.utm_present[utm]}`")
+            # ── Click URL column ──────────────────────────────────────────────
+            with url_col:
+                st.markdown("#### 🔗 Click URL")
+                if parsed.click_url:
+                    st.code(parsed.click_url, language=None)
+                    if st.button("Check URL & UTMs", key="tag_url_btn", type="primary"):
+                        with st.spinner("Checking URL…"):
+                            url_result = check_url(parsed.click_url)
+                        st.session_state["_tag_url_result"] = url_result
                 else:
-                    st.markdown(f"⚠️ `{utm}` — not present (recommended)")
+                    st.info("No click URL found in tag.")
 
-            # Any extra UTMs
-            extra = {k: v for k, v in ur.utm_present.items()
-                     if k not in REQUIRED_UTMS and k not in RECOMMENDED_UTMS}
-            for k, v in extra.items():
-                st.markdown(f"ℹ️ `{k}` = `{v}`")
+            # ── Creative check results ────────────────────────────────────────
+            if "_tag_creative_bytes" in st.session_state:
+                st.divider()
+                st.markdown("### Creative check results")
 
-            # Overall UTM verdict
-            if not ur.utm_missing:
-                st.success("All required UTM parameters present ✓")
-            else:
-                missing_str = ", ".join(f"`{u}`" for u in ur.utm_missing)
-                st.error(f"Missing required UTMs: {missing_str} — ask the client to add these to the click URL.")
+                tag_bytes = st.session_state["_tag_creative_bytes"]
+                tag_fmt   = st.session_state["_tag_creative_fmt"]
+
+                try:
+                    tag_img = Image.open(io.BytesIO(tag_bytes))
+                    tag_img.load()
+                    img_ok = True
+                except Exception as e:
+                    st.error(f"Could not open downloaded file as an image: {e}")
+                    img_ok = False
+
+                if img_ok:
+                    actual_w, actual_h = tag_img.size
+
+                    p1, p2 = st.columns([1, 2])
+                    with p1:
+                        st.image(tag_img, use_container_width=True)
+                        st.caption(f"{actual_w}×{actual_h}px · {len(tag_bytes)/1024:.1f} KB · {tag_fmt}")
+                    with p2:
+                        # Dimension match warning
+                        if parsed.declared_width and parsed.declared_height:
+                            if (actual_w, actual_h) != (parsed.declared_width, parsed.declared_height):
+                                st.warning(
+                                    f"⚠️ Tag declares **{parsed.declared_width}×{parsed.declared_height}px** "
+                                    f"but downloaded image is **{actual_w}×{actual_h}px**."
+                                )
+
+                        # Spec selection
+                        tag_matches = _DIM_LOOKUP.get((actual_w, actual_h), [])
+                        if not tag_matches and actual_w == actual_h:
+                            tag_matches = _DIM_LOOKUP.get("1:1", [])
+
+                        if not tag_matches:
+                            st.error(f"Image dimensions {actual_w}×{actual_h}px don't match any carsales spec.")
+                            tag_spec_key = None
+                        elif len(tag_matches) == 1:
+                            tag_spec_key = tag_matches[0]
+                            st.markdown(f"**Matched spec:** {FORMATS[tag_spec_key]['name']}")
+                        else:
+                            tag_spec_key = st.selectbox(
+                                "Multiple specs match — select the correct one:",
+                                tag_matches,
+                                format_func=lambda k: FORMATS[k]["name"],
+                                key="tag_spec_sel",
+                            )
+
+                        if tag_spec_key:
+                            tag_spec   = FORMATS[tag_spec_key]
+                            tag_checks = run_all_checks(tag_img, tag_bytes, tag_fmt, tag_spec)
+                            tag_failed  = [c for c in tag_checks if not c.passed]
+                            tag_fixable = [c for c in tag_failed if c.fixable]
+                            tag_client  = [c for c in tag_failed if c.needs_client]
+
+                            if not tag_failed:
+                                st.success("All checks passed ✓")
+                            elif tag_fixable and not tag_client:
+                                st.warning(f"{len(tag_fixable)} issue(s) — can be auto-fixed below")
+                            else:
+                                st.error(f"{len(tag_failed)} issue(s) — {len(tag_client)} need client revision")
+
+                            for c in tag_checks:
+                                icon = "✅" if c.passed else ("🔧" if c.fixable else "❌")
+                                st.markdown(f"{icon} **{c.name}:** {c.message}")
+
+                            if tag_fixable:
+                                if st.button("Apply fixes & download", key="tag_fix_btn", type="primary"):
+                                    with st.spinner("Applying fixes…"):
+                                        fixed_bytes, new_fmt, applied = apply_fixes(
+                                            tag_img.copy(), tag_bytes, tag_fmt, tag_spec, tag_checks
+                                        )
+                                    if applied:
+                                        st.success(f"Applied: {', '.join(applied)}")
+                                        final_kb = len(fixed_bytes) / 1024
+                                        ext = new_fmt.lower().replace("jpeg", "jpg")
+                                        fname = parsed.creative_url.rsplit("/", 1)[-1].split("?")[0] or "creative"
+                                        base  = os.path.splitext(fname)[0]
+                                        st.download_button(
+                                            label=f"⬇️  Download fixed  ({final_kb:.1f} KB)",
+                                            data=fixed_bytes,
+                                            file_name=f"{base}_fixed.{ext}",
+                                            mime=f"image/{ext}",
+                                            key="tag_dl_fixed",
+                                        )
+
+                            # Feedback email
+                            if tag_failed:
+                                st.divider()
+                                with st.expander("📋 Generate client feedback email", expanded=False):
+                                    fname_display = (
+                                        parsed.creative_url.rsplit("/", 1)[-1].split("?")[0]
+                                        or "creative"
+                                    )
+                                    feedback_ui([{
+                                        "filename":      fname_display,
+                                        "spec_name":     tag_spec["name"],
+                                        "client_checks":  tag_client,
+                                        "fixable_checks": tag_fixable,
+                                    }], "tag")
+
+            # ── Click URL / UTM results ───────────────────────────────────────
+            if "_tag_url_result" in st.session_state:
+                st.divider()
+                st.markdown("### Click URL & UTM results")
+                ur = st.session_state["_tag_url_result"]
+
+                if ur.resolves:
+                    st.success(f"URL resolves ✓  (HTTP {ur.status_code})")
+                else:
+                    msg = f"HTTP {ur.status_code}" if ur.status_code else "no response"
+                    st.error(f"URL did not resolve — {msg}")
+
+                if ur.final_url:
+                    st.caption(f"Redirected to: {ur.final_url}")
+
+                if ur.is_staging:
+                    st.error("⚠️ Staging/dev URL detected — must point to production before going live.")
+
+                for note in ur.notes:
+                    st.warning(note)
+
+                st.markdown("**UTM parameters**")
+
+                for utm in REQUIRED_UTMS:
+                    if utm in ur.utm_present:
+                        st.markdown(f"✅ `{utm}` = `{ur.utm_present[utm]}`")
+                    else:
+                        st.markdown(f"❌ `{utm}` — **missing** (required)")
+
+                for utm in RECOMMENDED_UTMS:
+                    if utm in ur.utm_present:
+                        st.markdown(f"✅ `{utm}` = `{ur.utm_present[utm]}`")
+                    else:
+                        st.markdown(f"⚠️ `{utm}` — not present (recommended)")
+
+                extra = {k: v for k, v in ur.utm_present.items()
+                         if k not in REQUIRED_UTMS and k not in RECOMMENDED_UTMS}
+                for k, v in extra.items():
+                    st.markdown(f"ℹ️ `{k}` = `{v}`")
+
+                if not ur.utm_missing:
+                    st.success("All required UTM parameters present ✓")
+                else:
+                    missing_str = ", ".join(f"`{u}`" for u in ur.utm_missing)
+                    st.error(f"Missing required UTMs: {missing_str} — ask the client to add these to the click URL.")
