@@ -4,6 +4,8 @@ import os
 import zipfile
 import datetime
 
+APP_VERSION = "1.2.0"
+
 import re
 import streamlit as st
 import streamlit.components.v1 as components
@@ -146,10 +148,11 @@ def clipboard_btn(text: str, btn_key: str) -> None:
     )
 
 
-def feedback_ui(items: list[dict], key_prefix: str) -> None:
+def feedback_ui(items: list[dict], key_prefix: str, default_campaign: str = "") -> None:
     """Render the campaign name input, email preview, and copy button."""
     campaign = st.text_input(
         "Campaign name (optional)",
+        value=default_campaign,
         placeholder="e.g. Toyota Corolla — May 2026",
         key=f"{key_prefix}_campaign",
     )
@@ -352,7 +355,10 @@ After checking, click *Generate client feedback email* to produce a ready-to-sen
 """)
 
     st.markdown("---")
-    st.caption("Specs: [carsales.com.au/ad-specs](https://business.carsales.com.au/ad-specs/) · Jan 2026")
+    st.caption(
+        f"Specs: [carsales.com.au/ad-specs](https://business.carsales.com.au/ad-specs/) · Jan 2026"
+        f"  ·  v{APP_VERSION}"
+    )
 
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown(
@@ -947,6 +953,7 @@ with tab4:
             xl_ok = False
             header_row_idx = 0
             df = None
+            camp_meta = {"advertiser": "", "campaign": ""}
 
             # ── Clear overrides when a new file is uploaded ───────────────────
             if st.session_state.get("_xl_file_id") != xl_file.name:
@@ -964,6 +971,16 @@ with tab4:
                            for v in row_vals):
                         header_row_idx = ri
                         break
+
+                # Pull advertiser/campaign name from CM360 metadata rows (label in col B, value in col I)
+                for _ri in range(min(header_row_idx, 15)):
+                    _row   = raw.iloc[_ri].fillna("").astype(str).tolist()
+                    _label = _row[1].lower() if len(_row) > 1 else ""
+                    _val   = _row[8].strip() if len(_row) > 8 else ""
+                    if "advertiser name" in _label and _val and _val.lower() != "nan":
+                        camp_meta["advertiser"] = _val
+                    elif "campaign name" in _label and _val and _val.lower() != "nan":
+                        camp_meta["campaign"] = _val
 
                 df = pd.read_excel(
                     io.BytesIO(file_bytes),
@@ -994,10 +1011,18 @@ with tab4:
                 auto_r = _find_col(["impression tag (image)"],        17)
                 auto_v = _find_col(["click tag"],                     21)
 
-                # ── Info strip ────────────────────────────────────────────────
+                # ── Campaign info strip ───────────────────────────────────────
+                if camp_meta["advertiser"] or camp_meta["campaign"]:
+                    _parts = []
+                    if camp_meta["advertiser"]:
+                        _parts.append(f"**Advertiser:** {camp_meta['advertiser']}")
+                    if camp_meta["campaign"]:
+                        _parts.append(f"**Campaign:** {camp_meta['campaign']}")
+                    st.info("  ·  ".join(_parts))
+
                 st.caption(
                     f"{len(df)} placements · {n_cols} columns · "
-                    f"Header detected at row {header_row_idx + 1}"
+                    f"Header auto-detected at row {header_row_idx + 1}"
                 )
                 det_names = {
                     "F · Placement ID":      str(df.columns[auto_f]),
@@ -1066,146 +1091,154 @@ with tab4:
                             except Exception:
                                 return ""
 
-                        placement_id   = _cell(idx_f)
-                        name           = _cell(idx_i) or placement_id or f"Row {i+1}"
-                        dimensions_str = _cell(idx_k)
-                        impression_tag = _cell(idx_r)
-                        click_tag_raw  = _cell(idx_v)
+                        try:
+                            placement_id   = _cell(idx_f)
+                            name           = _cell(idx_i) or placement_id or f"Row {i+1}"
+                            dimensions_str = _cell(idx_k)
+                            impression_tag = _cell(idx_r)
+                            click_tag_raw  = _cell(idx_v)
 
-                        status_ph.caption(f"Processing {i+1}/{max_rows}: {name} …")
+                            status_ph.caption(f"Processing {i+1}/{max_rows}: {name} …")
 
-                        # Skip entirely empty rows
-                        if not impression_tag and not click_tag_raw:
-                            xl_results.append({
-                                "name": name, "placement_id": placement_id, "skipped": True,
-                            })
-                            prog.progress((i + 1) / max_rows)
-                            continue
+                            # Skip entirely empty rows
+                            if not impression_tag and not click_tag_raw:
+                                xl_results.append({
+                                    "name": name, "placement_id": placement_id, "skipped": True,
+                                })
+                                continue
 
-                        # ── Spec matching from col K dimensions ───────────────
-                        k_spec_key       = None
-                        k_spec_name      = None
-                        k_dims           = None
-                        is_tracking_pixel = False
-                        if dimensions_str:
-                            dm = re.search(r'(\d+)\s*[xX×*]\s*(\d+)', dimensions_str)
-                            if dm:
-                                kw, kh = int(dm.group(1)), int(dm.group(2))
-                                k_dims = (kw, kh)
-                                # 1×1 is a CM360 impression-tracking pixel, not a creative
-                                if kw == 1 and kh == 1:
-                                    is_tracking_pixel = True
+                            # ── Spec matching from col K dimensions ───────────────
+                            k_spec_key       = None
+                            k_spec_name      = None
+                            k_dims           = None
+                            is_tracking_pixel = False
+                            if dimensions_str:
+                                dm = re.search(r'(\d+)\s*[xX×*]\s*(\d+)', dimensions_str)
+                                if dm:
+                                    kw, kh = int(dm.group(1)), int(dm.group(2))
+                                    k_dims = (kw, kh)
+                                    # 1×1 is a CM360 impression-tracking pixel, not a creative
+                                    if kw == 1 and kh == 1:
+                                        is_tracking_pixel = True
+                                    else:
+                                        k_matches = _DIM_LOOKUP.get((kw, kh), [])
+                                        if not k_matches and kw == kh:
+                                            k_matches = _DIM_LOOKUP.get("1:1", [])
+                                        if k_matches:
+                                            k_spec_key  = k_matches[0]
+                                            k_spec_name = FORMATS[k_spec_key]["name"]
+
+                            # ── Parse impression tag (col R) ──────────────────────
+                            parsed = parse_tag(impression_tag) if impression_tag else None
+
+                            # ── Extract click URL from col V ──────────────────────
+                            # Col V may be a bare URL, a full HTML click tag, or a CM360 tag
+                            if click_tag_raw:
+                                if "<" in click_tag_raw:
+                                    _cp = parse_tag(click_tag_raw)
+                                    click_url = _cp.click_url or click_tag_raw
                                 else:
-                                    k_matches = _DIM_LOOKUP.get((kw, kh), [])
-                                    if not k_matches and kw == kh:
-                                        k_matches = _DIM_LOOKUP.get("1:1", [])
-                                    if k_matches:
-                                        k_spec_key  = k_matches[0]
-                                        k_spec_name = FORMATS[k_spec_key]["name"]
-
-                        # ── Parse impression tag (col R) ──────────────────────
-                        parsed = parse_tag(impression_tag) if impression_tag else None
-
-                        # ── Extract click URL from col V ──────────────────────
-                        # Col V may be a bare URL, a full HTML click tag, or a CM360 tag
-                        if click_tag_raw:
-                            if "<" in click_tag_raw:
-                                _cp = parse_tag(click_tag_raw)
-                                click_url = _cp.click_url or click_tag_raw
+                                    click_url = click_tag_raw
                             else:
-                                click_url = click_tag_raw
-                        else:
-                            click_url = parsed.click_url if parsed else None
+                                click_url = parsed.click_url if parsed else None
 
-                        # ── Creative download + spec check ────────────────────
-                        creative_summary = None
-                        creative_url = parsed.creative_url if parsed else None
+                            # ── Creative download + spec check ────────────────────
+                            creative_summary = None
+                            creative_url = parsed.creative_url if parsed else None
 
-                        if is_tracking_pixel:
-                            # 1×1 impression pixels are purely for tracking — no creative to check
-                            creative_summary = {
-                                "tracking_pixel": True,
-                                "dims":   "1×1px",
-                                "spec":   "Tracking pixel",
-                                "checks": [], "failed": [], "fixable": [], "client": [],
-                            }
-                        elif creative_url:
-                            dl = download_creative(creative_url)
-                            if dl:
-                                try:
-                                    c_bytes, c_fmt = dl
-                                    c_img = Image.open(io.BytesIO(c_bytes))
-                                    c_img.load()
-                                    c_w, c_h = c_img.size
+                            if is_tracking_pixel:
+                                # 1×1 impression pixels are purely for tracking — no creative to check
+                                creative_summary = {
+                                    "tracking_pixel": True,
+                                    "dims":   "1×1px",
+                                    "spec":   "Tracking pixel",
+                                    "checks": [], "failed": [], "fixable": [], "client": [],
+                                }
+                            elif creative_url:
+                                dl = download_creative(creative_url)
+                                if dl:
+                                    try:
+                                        c_bytes, c_fmt = dl
+                                        c_img = Image.open(io.BytesIO(c_bytes))
+                                        c_img.load()
+                                        c_w, c_h = c_img.size
 
-                                    # Prefer spec from col K, fall back to image dimensions
-                                    if k_spec_key:
-                                        c_spec_key = k_spec_key
-                                    else:
-                                        c_matches = _DIM_LOOKUP.get((c_w, c_h), [])
-                                        if not c_matches and c_w == c_h:
-                                            c_matches = _DIM_LOOKUP.get("1:1", [])
-                                        c_spec_key = c_matches[0] if c_matches else None
+                                        # Prefer spec from col K, fall back to image dimensions
+                                        if k_spec_key:
+                                            c_spec_key = k_spec_key
+                                        else:
+                                            c_matches = _DIM_LOOKUP.get((c_w, c_h), [])
+                                            if not c_matches and c_w == c_h:
+                                                c_matches = _DIM_LOOKUP.get("1:1", [])
+                                            c_spec_key = c_matches[0] if c_matches else None
 
-                                    if c_spec_key:
-                                        c_spec = FORMATS[c_spec_key]
-                                        c_chks = run_all_checks(c_img, c_bytes, c_fmt, c_spec)
-                                        c_fail = [c for c in c_chks if not c.passed]
-                                        c_fix  = [c for c in c_fail if c.fixable]
-                                        c_cli  = [c for c in c_fail if c.needs_client]
-                                        creative_summary = {
-                                            "spec":      c_spec["name"],
-                                            "dims":      f"{c_w}×{c_h}px",
-                                            "checks":    c_chks,
-                                            "failed":    c_fail,
-                                            "fixable":   c_fix,
-                                            "client":    c_cli,
-                                            "bytes":     c_bytes,
-                                            "fmt":       c_fmt,
-                                            "spec_key":  c_spec_key,
-                                        }
-                                    else:
-                                        creative_summary = {"error": f"Dimensions {c_w}×{c_h}px — no matching carsales spec"}
-                                except Exception as e:
-                                    creative_summary = {"error": f"Image error: {e}"}
-                            else:
-                                creative_summary = {"error": "Creative download failed — URL may require authentication"}
-                        elif parsed and parsed.notes:
-                            # JS-rendered tag — no static URL, but we have dimensions from col K
-                            creative_summary = {
-                                "js_note":     parsed.notes[0],
-                                "spec":        k_spec_name or "",
-                                "dims":        (f"{k_dims[0]}×{k_dims[1]}px" if k_dims else dimensions_str),
-                                "checks":  [], "failed":  [], "fixable": [], "client": [],
-                            }
-                        elif k_spec_key:
-                            # No tag URL at all, but col K tells us the dimensions
-                            creative_summary = {
-                                "dims_only": True,
-                                "spec":      k_spec_name,
-                                "dims":      (f"{k_dims[0]}×{k_dims[1]}px" if k_dims else dimensions_str),
-                                "checks":  [], "failed":  [], "fixable": [], "client": [],
-                            }
+                                        if c_spec_key:
+                                            c_spec = FORMATS[c_spec_key]
+                                            c_chks = run_all_checks(c_img, c_bytes, c_fmt, c_spec)
+                                            c_fail = [c for c in c_chks if not c.passed]
+                                            c_fix  = [c for c in c_fail if c.fixable]
+                                            c_cli  = [c for c in c_fail if c.needs_client]
+                                            creative_summary = {
+                                                "spec":      c_spec["name"],
+                                                "dims":      f"{c_w}×{c_h}px",
+                                                "checks":    c_chks,
+                                                "failed":    c_fail,
+                                                "fixable":   c_fix,
+                                                "client":    c_cli,
+                                                "bytes":     c_bytes,
+                                                "fmt":       c_fmt,
+                                                "spec_key":  c_spec_key,
+                                            }
+                                        else:
+                                            creative_summary = {"error": f"Dimensions {c_w}×{c_h}px — no matching carsales spec"}
+                                    except Exception as e:
+                                        creative_summary = {"error": f"Image error: {e}"}
+                                else:
+                                    creative_summary = {"error": "Creative download failed — URL may require authentication"}
+                            elif parsed and parsed.notes:
+                                # JS-rendered tag — no static URL, but we have dimensions from col K
+                                creative_summary = {
+                                    "js_note":     parsed.notes[0],
+                                    "spec":        k_spec_name or "",
+                                    "dims":        (f"{k_dims[0]}×{k_dims[1]}px" if k_dims else dimensions_str),
+                                    "checks":  [], "failed":  [], "fixable": [], "client": [],
+                                }
+                            elif k_spec_key:
+                                # No tag URL at all, but col K tells us the dimensions
+                                creative_summary = {
+                                    "dims_only": True,
+                                    "spec":      k_spec_name,
+                                    "dims":      (f"{k_dims[0]}×{k_dims[1]}px" if k_dims else dimensions_str),
+                                    "checks":  [], "failed":  [], "fixable": [], "client": [],
+                                }
 
-                        # ── Click URL check ───────────────────────────────────
-                        url_summary = None
-                        if click_url and check_urls_toggle:
-                            url_summary = check_url(click_url)
+                            # ── Click URL check ───────────────────────────────────
+                            url_summary = None
+                            if click_url and check_urls_toggle:
+                                url_summary = check_url(click_url)
 
-                        xl_results.append({
-                            "name":           name,
-                            "placement_id":   placement_id,
-                            "skipped":        False,
-                            "impression_tag": impression_tag,
-                            "click_tag_raw":  click_tag_raw,
-                            "parsed":         parsed,
-                            "creative":       creative_summary,
-                            "url":            url_summary,
-                            "click_url":      click_url,
-                            "dimensions_str": dimensions_str,
-                            "k_spec_name":    k_spec_name,
-                        })
-                        prog.progress((i + 1) / max_rows)
+                            xl_results.append({
+                                "name":           name,
+                                "placement_id":   placement_id,
+                                "skipped":        False,
+                                "impression_tag": impression_tag,
+                                "click_tag_raw":  click_tag_raw,
+                                "parsed":         parsed,
+                                "creative":       creative_summary,
+                                "url":            url_summary,
+                                "click_url":      click_url,
+                                "dimensions_str": dimensions_str,
+                                "k_spec_name":    k_spec_name,
+                            })
+                        except Exception as _row_err:
+                            xl_results.append({
+                                "name":         f"Row {i+1}",
+                                "placement_id": "",
+                                "skipped":      True,
+                                "row_error":    str(_row_err),
+                            })
+                        finally:
+                            prog.progress((i + 1) / max_rows)
 
                     prog.empty()
                     status_ph.empty()
@@ -1243,21 +1276,73 @@ with tab4:
                         return "pass"
 
                     sm1, sm2, sm3, sm4, sm5 = st.columns(5)
-                    sm1.metric("Rows processed",      len(processed))
-                    sm2.metric("✅ Creative OK",       sum(1 for r in processed if _creative_status(r) == "pass"))
-                    sm3.metric("⚠️ Creative issues",   sum(1 for r in processed if _creative_status(r) in ("client", "fixable", "error")))
-                    sm4.metric("✅ UTMs OK",           sum(1 for r in processed if _url_status(r) == "pass"))
-                    sm5.metric("❌ UTM issues",        sum(1 for r in processed if _url_status(r) in ("error", "missing_utm", "staging")))
+                    sm1.metric("Placements",           len(processed))
+                    sm2.metric("✅ Creative OK",        sum(1 for r in processed if _creative_status(r) == "pass"))
+                    sm3.metric("⚠️ Creative issues",    sum(1 for r in processed if _creative_status(r) in ("client", "fixable", "error")))
+                    sm4.metric("✅ UTMs OK",            sum(1 for r in processed if _url_status(r) == "pass"))
+                    sm5.metric("❌ UTM issues",         sum(1 for r in processed if _url_status(r) in ("error", "missing_utm", "staging")))
+
+                    # ── Summary table ─────────────────────────────────────────
+                    _C_ICON = {
+                        "pass": "✅", "fixable": "🔧", "client": "❌",
+                        "error": "⚠️", "tracking_pixel": "ℹ️",
+                        "js_tag": "ℹ️", "dims_only": "ℹ️", "no_url": "—",
+                    }
+                    _U_ICON = {
+                        "pass": "✅", "missing_utm": "⚠️",
+                        "staging": "❌", "error": "❌", "no_url": "—",
+                    }
+                    import pandas as _pd
+                    _tbl_rows = []
+                    for _r in processed:
+                        _c = _r.get("creative") or {}
+                        _u = _r.get("url")
+                        _c_st = _creative_status(_r)
+                        _u_st = _url_status(_r)
+                        _tbl_rows.append({
+                            "Placement":    _r["name"],
+                            "ID":           _r.get("placement_id", ""),
+                            "Dimensions":   _r.get("dimensions_str", ""),
+                            "Spec":         _c.get("spec") or _r.get("k_spec_name", ""),
+                            "Creative":     _C_ICON.get(_c_st, "—"),
+                            "Click URL":    _U_ICON.get(_u_st, "—"),
+                            "Missing UTMs": ", ".join(_u.utm_missing) if _u and _u.utm_missing else "",
+                        })
+                    _summary_df = _pd.DataFrame(_tbl_rows)
+
+                    show_issues_only = st.toggle(
+                        "Show issues only",
+                        value=False,
+                        key="xl_issues_only",
+                    )
+                    if show_issues_only:
+                        _mask = _summary_df["Creative"].isin(["🔧", "❌", "⚠️"]) | \
+                                _summary_df["Click URL"].isin(["⚠️", "❌"]) | \
+                                (_summary_df["Missing UTMs"] != "")
+                        st.dataframe(_summary_df[_mask], use_container_width=True, hide_index=True)
+                    else:
+                        st.dataframe(_summary_df, use_container_width=True, hide_index=True)
 
                     st.divider()
 
                     all_xl_issues = []
                     for row_i, r in enumerate(xl_results):
+                        if r.get("row_error"):
+                            st.warning(f"⚠️ {r['name']} could not be processed: {r['row_error']}")
+                            continue
                         if r.get("skipped"):
-                            continue  # silently skip empty rows
+                            continue
 
                         c_st = _creative_status(r)
                         u_st = _url_status(r)
+
+                        # Respect issues-only toggle — skip clean rows in expander view
+                        _is_clean = (
+                            c_st in ("pass", "tracking_pixel", "dims_only", "js_tag", "no_url")
+                            and u_st in ("pass", "no_url")
+                        )
+                        if show_issues_only and _is_clean:
+                            continue
 
                         if c_st in ("pass", "dims_only", "js_tag", "tracking_pixel") and u_st in ("pass", "no_url"):
                             row_icon = "✅"
@@ -1386,14 +1471,55 @@ with tab4:
                                     "fixable_checks": c.get("fixable", []),
                                 })
 
-                    # Bulk feedback
+                    # ── Export results as Excel ───────────────────────────────
+                    st.divider()
+                    import pandas as _pd2
+                    _export_rows = []
+                    for _r in processed:
+                        _c  = _r.get("creative") or {}
+                        _u  = _r.get("url")
+                        _export_rows.append({
+                            "Placement ID":    _r.get("placement_id", ""),
+                            "Placement Name":  _r["name"],
+                            "Dimensions":      _r.get("dimensions_str", ""),
+                            "Spec":            _c.get("spec") or _r.get("k_spec_name", ""),
+                            "Creative Status": _creative_status(_r).replace("_", " ").title(),
+                            "Click URL":       _r.get("click_url", ""),
+                            "URL Resolves":    ("Yes" if _u and _u.resolves else ("No" if _u else "Not checked")),
+                            "Staging URL":     ("Yes" if _u and _u.is_staging else ""),
+                            "utm_source":      (_u.utm_present.get("utm_source",   "") if _u else ""),
+                            "utm_medium":      (_u.utm_present.get("utm_medium",   "") if _u else ""),
+                            "utm_campaign":    (_u.utm_present.get("utm_campaign", "") if _u else ""),
+                            "utm_content":     (_u.utm_present.get("utm_content",  "") if _u else ""),
+                            "Missing UTMs":    (", ".join(_u.utm_missing) if _u and _u.utm_missing else ""),
+                        })
+                    _export_df  = _pd2.DataFrame(_export_rows)
+                    _export_buf = io.BytesIO()
+                    _export_df.to_excel(_export_buf, index=False, engine="openpyxl")
+                    _fname_stem = (
+                        camp_meta.get("advertiser") or
+                        camp_meta.get("campaign") or
+                        xl_file.name.rsplit(".", 1)[0]
+                    )
+                    st.download_button(
+                        label="⬇️  Download results as Excel",
+                        data=_export_buf.getvalue(),
+                        file_name=f"{_fname_stem}_ad_check_results.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="xl_export",
+                    )
+
+                    # ── Bulk feedback email ───────────────────────────────────
                     if all_xl_issues:
                         st.divider()
                         with st.expander("📋 Generate client feedback email", expanded=False):
                             st.caption(
                                 f"Covers **{len(all_xl_issues)} placement{'s' if len(all_xl_issues)!=1 else ''}** with issues."
                             )
-                            feedback_ui(all_xl_issues, "xl")
+                            _default_campaign = " — ".join(
+                                filter(None, [camp_meta.get("advertiser"), camp_meta.get("campaign")])
+                            )
+                            feedback_ui(all_xl_issues, "xl", default_campaign=_default_campaign)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SINGLE PASTE MODE
