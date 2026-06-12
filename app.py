@@ -386,7 +386,183 @@ for _k, _s in FORMATS.items():
     elif _s.get("aspect_ratio") == "1:1":
         _DIM_LOOKUP.setdefault("1:1", []).append(_k)
 
-tab1, tab2, tab3, tab4 = st.tabs(["Single file", "Multi-file", "ZIP bundle", "Ad Tag"])
+# ── Campaign check helpers ────────────────────────────────────────────────────
+import difflib as _difflib
+
+def _camp_name_score(a: str, b: str) -> float:
+    a = re.sub(r'[_\-\s\.]+', ' ', os.path.splitext(a)[0]).lower()
+    b = re.sub(r'[_\-\s\.]+', ' ', b).lower()
+    a_words, b_words = set(a.split()), set(b.split())
+    overlap = len(a_words & b_words) / max(len(b_words), 1)
+    seq = _difflib.SequenceMatcher(None, a, b).ratio()
+    return max(seq, overlap)
+
+def _match_to_placement(filename: str, img_dims, placements: list, threshold: float = 0.35):
+    best_idx, best_score = None, threshold
+    for i, p in enumerate(placements):
+        s = _camp_name_score(filename, p["name"])
+        if s > best_score:
+            best_score, best_idx = s, i
+    if best_idx is not None:
+        return best_idx
+    if img_dims:
+        for i, p in enumerate(placements):
+            spec = FORMATS.get(p.get("spec_key") or "", {})
+            if spec.get("dimensions") == img_dims:
+                return i
+    return None
+
+def _expand_creative_uploads(files) -> list[tuple[str, bytes]]:
+    out = []
+    for f in files:
+        raw = f.read()
+        if f.name.lower().endswith(".zip"):
+            try:
+                with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                    for zi in zf.infolist():
+                        bn = os.path.basename(zi.filename)
+                        if zi.filename.startswith("__MACOSX") or bn.startswith("."):
+                            continue
+                        if any(bn.lower().endswith(x) for x in (".jpg", ".jpeg", ".png", ".gif")):
+                            out.append((bn, zf.read(zi)))
+            except Exception:
+                pass
+        else:
+            out.append((f.name, raw))
+    return out
+
+def _parse_camp_mi(file_bytes: bytes) -> list[dict]:
+    import pandas as _pdm
+    _SHEET_GROUP = {
+        "carsales card": "carsales Card", "card": "carsales Card",
+        "discover": "carsales Discover", "carousel": "carsales Carousel",
+        "brand terms": "Brand Terms", "unmissable": "Unmissable",
+        "in feed": "In Feed Video", "infeed": "In Feed Video",
+        "stock boost": "Stock Boost", "guaranteed": "Guaranteed Consideration",
+        "new car": "New Car Showroom & Research",
+    }
+    _KW = {
+        "Card Text":                         ["card text (b)", "card text"],
+        "Headline Text":                     ["headline text (c)", "headline text"],
+        "Headline":                          ["headline text (c)", "headline text", "headline"],
+        "Sub-headline Text":                 ["sub-headline", "subheadline"],
+        "Body Text":                         ["body text"],
+        "Body":                              ["body text", "body"],
+        "CTA Text":                          ["cta text (e)", "cta text"],
+        "CTA":                               ["cta text (e)", "cta text", "cta"],
+        "Link Description (off-network only)": ["link description (d", "link description"],
+        "Advertiser Name":                   ["advertiser (a)", "advertiser name", "advertiser"],
+        "Advertiser":                        ["advertiser (a)", "advertiser"],
+        "Title":                             ["title"],
+        "Header Text":                       ["header text"],
+        "_dims": ["image size", "dimensions", "size"],
+        "_url":  ["click through url", "destination url"],
+    }
+    try:
+        xl = _pdm.ExcelFile(io.BytesIO(file_bytes))
+    except Exception:
+        return []
+    for sheet in xl.sheet_names:
+        sl = sheet.lower()
+        product_group = next((g for kw, g in _SHEET_GROUP.items() if kw in sl), None)
+        copy_limits = COPY_LIMITS.get(product_group, {}) if product_group else {}
+        try:
+            raw = _pdm.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, header=None)
+        except Exception:
+            continue
+        header_row, col_map = None, {}
+        for ri in range(min(25, len(raw))):
+            rv = raw.iloc[ri].fillna("").astype(str).str.lower().tolist()
+            found, tmp = 0, {}
+            for ci, cell in enumerate(rv):
+                for label, kws in _KW.items():
+                    if label not in tmp and any(kw in cell for kw in kws):
+                        tmp[label] = ci; found += 1
+            if found >= 3:
+                header_row, col_map = ri, tmp; break
+        if header_row is None:
+            continue
+        copy_fields = list(copy_limits.keys()) if copy_limits else [k for k in col_map if not k.startswith("_")]
+        primary_col = next((col_map[f] for f in copy_fields if f in col_map), None)
+        if primary_col is None:
+            continue
+        placements = []
+        for ri in range(header_row + 2, len(raw)):
+            row = raw.iloc[ri]
+            pval = str(row.iloc[primary_col]).strip()
+            if not pval or pval.lower() in ("nan", "none", ""):
+                continue
+            pname = next(
+                (str(row.iloc[ci]).strip() for ci in range(min(primary_col, len(row)))
+                 if str(row.iloc[ci]).strip() and str(row.iloc[ci]).strip().lower() not in ("nan","none","")),
+                f"Row {ri+1}"
+            )
+            copy_vals = {}
+            for f in copy_fields:
+                if f in col_map:
+                    v = str(row.iloc[col_map[f]]).strip()
+                    if v and v.lower() not in ("nan", "none", "0"):
+                        copy_vals[f] = v
+            dims_str = str(row.iloc[col_map["_dims"]]).strip() if "_dims" in col_map else ""
+            url_val  = str(row.iloc[col_map["_url"]]).strip()  if "_url"  in col_map else ""
+            if url_val.lower() in ("nan","none",""): url_val = ""
+            spec_key = None
+            if dims_str:
+                dm = re.search(r'(\d+)\s*[xX×*]\s*(\d+)', dims_str)
+                if dm:
+                    dw, dh = int(dm.group(1)), int(dm.group(2))
+                    ms = _DIM_LOOKUP.get((dw, dh), [])
+                    if not ms and dw == dh: ms = _DIM_LOOKUP.get("1:1", [])
+                    if ms:
+                        grp_ms = [m for m in ms if FORMATS[m]["group"] == product_group] if product_group else []
+                        spec_key = (grp_ms or ms)[0]
+            placements.append({
+                "name": pname, "product_group": product_group or "",
+                "spec_key": spec_key, "dims_str": dims_str,
+                "copy": copy_vals, "copy_limits": copy_limits, "url": url_val,
+            })
+        if placements:
+            return placements
+    return []
+
+def _parse_camp_tags(file_bytes: bytes) -> dict:
+    import pandas as _pdt
+    try:
+        raw = _pdt.read_excel(io.BytesIO(file_bytes), header=None)
+    except Exception:
+        return {}
+    hri = 0
+    for ri in range(min(25, len(raw))):
+        rv = raw.iloc[ri].fillna("").astype(str).str.lower().tolist()
+        if any("placement id" in v or "click tag" in v or "impression tag" in v for v in rv):
+            hri = ri; break
+    df = raw.iloc[hri + 1:].reset_index(drop=True)
+    n = len(df.columns)
+    hrow = raw.iloc[hri].fillna("").astype(str).tolist()
+    def _fc(kws, default):
+        for kw in kws:
+            for ci, h in enumerate(hrow):
+                if kw.lower() in h.lower(): return ci
+        return min(default, n - 1)
+    idx_name = _fc(["placement name"], 8)
+    idx_r    = _fc(["impression tag (image)"], 17)
+    idx_v    = _fc(["click tag"], 21)
+    def _c(row, idx):
+        try:
+            v = str(row.iloc[idx]).strip()
+            return "" if v.lower() in ("nan","none","<na>","nat") else v
+        except Exception: return ""
+    out = {}
+    for i in range(len(df)):
+        row = df.iloc[i]
+        name = _c(row, idx_name)
+        if not name: continue
+        imp = _c(row, idx_r); clk = _c(row, idx_v)
+        if imp or clk:
+            out[name.strip()] = {"impression_tag": imp, "click_tag_raw": clk}
+    return out
+
+tab_camp, tab1, tab2, tab3, tab4 = st.tabs(["Campaign Check", "Single file", "Multi-file", "ZIP bundle", "Ad Tag"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1886,3 +2062,369 @@ with tab4:
                 else:
                     missing_str = ", ".join(f"`{u}`" for u in ur.utm_missing)
                     st.error(f"Missing required UTMs: {missing_str} — ask the client to add these to the click URL.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB CAMP — Campaign Check
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_camp:
+    st.caption("Upload your MI sheet, creative files, and CM360 tags to check everything against each placement in one pass.")
+
+    # ── Step 1: MI Sheet ──────────────────────────────────────────────────────
+    st.subheader("1 · MI Sheet")
+    camp_mi_up = st.file_uploader("Upload MI sheet (Excel)", type=["xlsx", "xls"], key="camp_mi_up")
+
+    camp_placements: list[dict] = []
+    if camp_mi_up:
+        if st.session_state.get("_camp_mi_id") != camp_mi_up.name:
+            with st.spinner("Parsing MI sheet…"):
+                _parsed_pl = _parse_camp_mi(camp_mi_up.read())
+            st.session_state["_camp_placements"] = _parsed_pl
+            st.session_state["_camp_mi_id"]      = camp_mi_up.name
+            st.session_state.pop("_camp_results", None)
+        camp_placements = st.session_state.get("_camp_placements", [])
+        if not camp_placements:
+            st.warning("Could not detect placements — check the MI sheet matches the standard carsales template.")
+        else:
+            st.success(f"{len(camp_placements)} placements detected")
+            _prev_df_rows = []
+            for p in camp_placements:
+                _copy_ok = all(len(v) <= p["copy_limits"].get(f, 999) for f, v in p["copy"].items())
+                _prev_df_rows.append({
+                    "Placement":  p["name"],
+                    "Spec":       FORMATS[p["spec_key"]]["name"] if p.get("spec_key") else p.get("dims_str") or "—",
+                    "Copy":       "✅" if _copy_ok else "❌",
+                    "URL":        "✅" if p.get("url") else "—",
+                })
+            import pandas as _pd_prev
+            st.dataframe(_pd_prev.DataFrame(_prev_df_rows), hide_index=True, use_container_width=True)
+    else:
+        if st.session_state.get("_camp_mi_id"):
+            for _k in ["_camp_placements", "_camp_mi_id", "_camp_results"]:
+                st.session_state.pop(_k, None)
+
+    st.divider()
+
+    # ── Step 2: Creative assets ───────────────────────────────────────────────
+    st.subheader("2 · Creative assets")
+    camp_creative_ups = st.file_uploader(
+        "Upload images or ZIP — multiple files supported",
+        type=["jpg", "jpeg", "png", "gif", "zip"],
+        accept_multiple_files=True,
+        key="camp_creatives_up",
+    )
+
+    _expanded_files: list[tuple[str, bytes]] = []
+    if camp_creative_ups:
+        _expanded_files = _expand_creative_uploads(camp_creative_ups)
+        st.caption(f"{len(_expanded_files)} image file{'s' if len(_expanded_files) != 1 else ''} ready")
+
+        # Show auto-match preview against MI placements if available
+        if camp_placements:
+            _match_rows = []
+            for fname, fbytes in _expanded_files:
+                try:
+                    _img = Image.open(io.BytesIO(fbytes)); _img.load()
+                    _dims = (_img.size[0], _img.size[1])
+                except Exception:
+                    _dims = None
+                _midx = _match_to_placement(fname, _dims, camp_placements)
+                _match_rows.append({
+                    "File":       fname,
+                    "Matched to": camp_placements[_midx]["name"] if _midx is not None else "— unmatched",
+                })
+            import pandas as _pd_match
+            st.dataframe(_pd_match.DataFrame(_match_rows), hide_index=True, use_container_width=True)
+
+    st.divider()
+
+    # ── Step 3: Tags (optional) ───────────────────────────────────────────────
+    st.subheader("3 · Ad tags — optional")
+    camp_tags_up = st.file_uploader("Upload CM360 trafficking sheet", type=["xlsx", "xls"], key="camp_tags_up")
+    if camp_tags_up:
+        st.caption("Tags will be matched to placements by name and click URLs will be checked.")
+
+    st.divider()
+
+    # ── Run button ────────────────────────────────────────────────────────────
+    _can_run = bool(camp_placements and _expanded_files)
+    if not camp_placements:
+        st.info("Upload an MI sheet in Step 1 to get started.")
+    elif not _expanded_files:
+        st.info("Upload creative files in Step 2 to run checks.")
+    else:
+        if st.button("Run campaign checks", type="primary", key="camp_run_btn"):
+            _camp_results = []
+            _all_files = _expanded_files
+
+            # Parse tags if supplied
+            _tag_map = {}
+            if camp_tags_up:
+                with st.spinner("Parsing tags…"):
+                    _tag_map = _parse_camp_tags(camp_tags_up.read())
+
+            # Match each file to a placement (first match wins)
+            _file_assign: dict[int, tuple[str, bytes]] = {}
+            for _fname, _fbytes in _all_files:
+                try:
+                    _img = Image.open(io.BytesIO(_fbytes)); _img.load()
+                    _dims = (_img.size[0], _img.size[1])
+                except Exception:
+                    _dims = None
+                _midx = _match_to_placement(_fname, _dims, camp_placements)
+                if _midx is not None and _midx not in _file_assign:
+                    _file_assign[_midx] = (_fname, _fbytes)
+
+            prog_c = st.progress(0)
+            stat_c = st.empty()
+            for _pi, _p in enumerate(camp_placements):
+                stat_c.caption(f"Checking {_pi+1}/{len(camp_placements)}: {_p['name']} …")
+                _res = {
+                    "name":        _p["name"],
+                    "spec_key":    _p.get("spec_key"),
+                    "copy_checks": [],
+                    "creative":    None,
+                    "tag":         None,
+                    "creative_file": None,
+                }
+
+                # Copy validation
+                for _field, _limit in _p["copy_limits"].items():
+                    _val = _p["copy"].get(_field, "")
+                    if _val:
+                        _ok = len(_val) <= _limit
+                        _res["copy_checks"].append({
+                            "field": _field, "value": _val,
+                            "limit": _limit, "count": len(_val), "passed": _ok,
+                        })
+
+                # Creative check
+                if _pi in _file_assign:
+                    _fname, _fbytes = _file_assign[_pi]
+                    _res["creative_file"] = _fname
+                    if _p.get("spec_key"):
+                        _spec = FORMATS[_p["spec_key"]]
+                        try:
+                            _img = Image.open(io.BytesIO(_fbytes)); _img.load()
+                            _fmt = _img.format or "JPEG"
+                            _chks = run_all_checks(_img, _fbytes, _fmt, _spec)
+                            _fail = [c for c in _chks if not c.passed]
+                            _res["creative"] = {
+                                "dims":    f"{_img.size[0]}×{_img.size[1]}px",
+                                "checks":  _chks,
+                                "failed":  _fail,
+                                "fixable": [c for c in _fail if c.fixable],
+                                "client":  [c for c in _fail if c.needs_client],
+                                "bytes":   _fbytes,
+                                "fmt":     _fmt,
+                            }
+                        except Exception as _e:
+                            _res["creative"] = {"error": str(_e)}
+                    else:
+                        _res["creative"] = {"no_spec": True}
+
+                # Tag matching (fuzzy by name)
+                _best_tag, _best_ts = None, 0.35
+                for _tname, _tdata in _tag_map.items():
+                    _ts = _camp_name_score(_p["name"], _tname)
+                    if _ts > _best_ts:
+                        _best_ts, _best_tag = _ts, _tdata
+                if _best_tag:
+                    _imp = _best_tag["impression_tag"]
+                    _clk = _best_tag["click_tag_raw"]
+                    _parsed_t = parse_tag(_imp) if _imp else None
+                    if _clk and "<" in _clk:
+                        _cp2 = parse_tag(_clk)
+                        _click_url = _cp2.click_url or _clk
+                    elif _clk:
+                        _click_url = _clk
+                    else:
+                        _click_url = _parsed_t.click_url if _parsed_t else None
+                    _url_sum = check_url(_click_url) if _click_url else None
+                    _res["tag"] = {
+                        "impression_tag": _imp,
+                        "click_url":      _click_url,
+                        "url_summary":    _url_sum,
+                    }
+
+                _camp_results.append(_res)
+                prog_c.progress((_pi + 1) / len(camp_placements))
+
+            prog_c.empty(); stat_c.empty()
+            st.session_state["_camp_results"] = _camp_results
+            st.rerun()
+
+    # ── Results ───────────────────────────────────────────────────────────────
+    if "_camp_results" in st.session_state:
+        _camp_res = st.session_state["_camp_results"]
+        st.divider()
+        st.subheader("Results")
+
+        # Status helpers
+        def _cst(r):
+            c = r.get("creative")
+            if c is None:           return "no_file"
+            if "error" in c:        return "error"
+            if c.get("no_spec"):    return "no_spec"
+            if c.get("client"):     return "client"
+            if c.get("fixable"):    return "fixable"
+            return "pass"
+
+        def _cpst(r):
+            if not r["copy_checks"]:    return "no_copy"
+            if all(x["passed"] for x in r["copy_checks"]): return "pass"
+            return "fail"
+
+        def _tst(r):
+            t = r.get("tag")
+            if t is None:           return "no_tag"
+            u = t.get("url_summary")
+            if u is None:           return "tag_only"
+            if not u.resolves:      return "error"
+            if u.is_staging:        return "staging"
+            if u.utm_missing:       return "missing_utm"
+            return "pass"
+
+        _C_ICON  = {"pass":"✅","fixable":"🔧","client":"❌","error":"⚠️","no_file":"—","no_spec":"—"}
+        _CP_ICON = {"pass":"✅","fail":"❌","no_copy":"—"}
+        _T_ICON  = {"pass":"✅","tag_only":"ℹ️","missing_utm":"⚠️","staging":"❌","error":"❌","no_tag":"—"}
+
+        # Summary metrics
+        _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+        _mc1.metric("Placements",        len(_camp_res))
+        _mc2.metric("Creative pass",     sum(1 for r in _camp_res if _cst(r) == "pass"))
+        _mc3.metric("Copy pass",         sum(1 for r in _camp_res if _cpst(r) == "pass"))
+        _mc4.metric("Tags checked",      sum(1 for r in _camp_res if r.get("tag")))
+
+        # Summary table
+        import pandas as _pd_cr
+        _sum_rows = [{
+            "Placement":  r["name"],
+            "Creative":   _C_ICON.get(_cst(r), "?"),
+            "Copy":       _CP_ICON.get(_cpst(r), "?"),
+            "Tag / URL":  _T_ICON.get(_tst(r), "?"),
+            "File":       r.get("creative_file") or "—",
+        } for r in _camp_res]
+        st.dataframe(_pd_cr.DataFrame(_sum_rows), hide_index=True, use_container_width=True)
+
+        # Issues-only toggle
+        _issues_only = st.toggle("Show issues only", value=False, key="camp_issues_only")
+
+        # Per-placement expanders
+        for _r in _camp_res:
+            _cs, _cps, _ts = _cst(_r), _cpst(_r), _tst(_r)
+            _is_clean = _cs in ("pass","no_file","no_spec") and _cps in ("pass","no_copy") and _ts in ("pass","no_tag","tag_only")
+            if _issues_only and _is_clean:
+                continue
+
+            if _cs == "pass" and _cps in ("pass","no_copy") and _ts in ("pass","no_tag","tag_only"):
+                _icon = "✅"
+            elif _cs == "client" or _ts in ("error","staging"):
+                _icon = "❌"
+            else:
+                _icon = "⚠️"
+
+            with st.expander(f"{_icon} {_r['name']}", expanded=(_icon != "✅")):
+                _ec1, _ec2, _ec3 = st.columns(3)
+
+                # Creative column
+                with _ec1:
+                    st.markdown("**Creative**")
+                    _c = _r.get("creative")
+                    if _c is None:
+                        st.caption("No file matched")
+                    elif "error" in _c:
+                        st.error(_c["error"])
+                    elif _c.get("no_spec"):
+                        f_label = _r.get("creative_file","")
+                        st.caption(f"{f_label} — spec not detected")
+                    else:
+                        st.caption(f"{_r.get('creative_file','')}  ·  {_c.get('dims','')}")
+                        if not _c["failed"]:
+                            st.success("All checks passed")
+                        else:
+                            for _chk in _c["failed"]:
+                                _fix_icon = "🔧" if _chk.fixable else "❌"
+                                st.markdown(f"{_fix_icon} {_chk.message}")
+                        if _c.get("fixable"):
+                            if st.button("Apply fixes & download", key=f"camp_fix_{_r['name']}"):
+                                with st.spinner("Fixing…"):
+                                    _fb, _nf, _ap = apply_fixes(
+                                        Image.open(io.BytesIO(_c["bytes"])).copy(),
+                                        _c["bytes"], _c["fmt"],
+                                        FORMATS[_r["spec_key"]], _c["checks"],
+                                    )
+                                if _ap:
+                                    _ext = _nf.lower().replace("jpeg","jpg")
+                                    st.download_button(
+                                        "⬇️ Download fixed",
+                                        data=_fb,
+                                        file_name=f"{os.path.splitext(_r.get('creative_file','fixed'))[0]}_fixed.{_ext}",
+                                        mime=f"image/{_ext}",
+                                        key=f"camp_dl_{_r['name']}",
+                                    )
+
+                # Copy column
+                with _ec2:
+                    st.markdown("**Copy**")
+                    if not _r["copy_checks"]:
+                        st.caption("No copy fields in MI sheet")
+                    else:
+                        for _cc in _r["copy_checks"]:
+                            _ok = _cc["passed"]
+                            _ico = "✅" if _ok else "❌"
+                            st.markdown(f"{_ico} **{_cc['field']}**")
+                            st.caption(f"  {_cc['value'][:60]}{'…' if len(_cc['value'])>60 else ''}")
+                            _over = _cc['count'] - _cc['limit']
+                            _char_note = f"  {_cc['count']}/{_cc['limit']} chars" + ("  ✓" if _ok else f"  — over by {_over}")
+                            st.caption(_char_note)
+
+                # Tag column
+                with _ec3:
+                    st.markdown("**Tag / URL**")
+                    _t = _r.get("tag")
+                    if _t is None:
+                        st.caption("No tag matched")
+                    else:
+                        if _t.get("impression_tag"):
+                            st.caption("Impression tag: ✅ present")
+                        if _t.get("click_url"):
+                            st.caption(f"URL: `{_t['click_url'][:50]}…`" if len(_t.get("click_url","")) > 50 else f"URL: `{_t['click_url']}`")
+                        _u = _t.get("url_summary")
+                        if _u:
+                            if not _u.resolves:
+                                st.error("URL does not resolve")
+                            elif _u.is_staging:
+                                st.error("Staging URL — not production")
+                            elif _u.utm_missing:
+                                st.warning(f"Missing UTMs: {', '.join(_u.utm_missing)}")
+                            else:
+                                st.success("URL OK")
+
+        # Export
+        st.divider()
+        _exp_rows = []
+        for _r in _camp_res:
+            _row = {
+                "Placement":       _r["name"],
+                "Creative status": _cst(_r),
+                "Creative file":   _r.get("creative_file") or "",
+                "Creative dims":   (_r.get("creative") or {}).get("dims",""),
+                "Copy status":     _cpst(_r),
+            }
+            for _cc in _r["copy_checks"]:
+                _row[f"Copy: {_cc['field']}"] = _cc["value"]
+                _row[f"Copy: {_cc['field']} chars"] = _cc["count"]
+            _row["Tag status"]  = _tst(_r)
+            _row["Click URL"]   = (_r.get("tag") or {}).get("click_url","")
+            _exp_rows.append(_row)
+        _exp_buf = io.BytesIO()
+        import pandas as _pd_exp
+        _pd_exp.DataFrame(_exp_rows).to_excel(_exp_buf, index=False, engine="openpyxl")
+        st.download_button(
+            "⬇️  Download campaign results as Excel",
+            data=_exp_buf.getvalue(),
+            file_name="campaign_check_results.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="camp_export",
+        )
