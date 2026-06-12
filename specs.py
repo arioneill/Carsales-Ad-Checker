@@ -274,3 +274,48 @@ CARD_TEXT_LIMITS = {
     "CTA Text": 18,
     "Link Description (off-network only)": 35,
 }
+
+# Copy/text field character limits keyed by product group name.
+# All limits include spaces unless noted.
+COPY_LIMITS: dict[str, dict[str, int]] = {
+    "carsales Card": {
+        "Headline Text": 30,
+        "Card Text": 90,
+        "CTA Text": 18,
+        "Link Description (off-network only)": 35,
+    },
+    "carsales Discover": {
+        "Headline": 30,
+        "Advertiser Name": 18,
+        "CTA": 18,
+    },
+    "carsales Carousel": {
+        "Headline Text": 30,
+        "Sub-headline Text": 30,
+        "Body Text": 110,
+        "CTA Text": 18,
+    },
+    "Brand Terms": {
+        "Headline": 30,
+        "Body": 70,
+        "CTA": 10,
+    },
+    "New Car Showroom & Research": {
+        "Hero Image Text Link": 35,
+        "Native Tile Headline": 25,
+        "Native Tile Body Copy": 85,
+    },
+    "Auto Unmissable High-Impact": {
+        "Unmissable Bar Text": 40,
+        "External Text Link": 35,
+    },
+    "In Feed Video": {
+        "Title": 35,
+        "CTA": 18,
+        "Description (Desktop, all ratios)": 108,
+        "Description (Mobile 1:1)": 48,
+    },
+    "Stock Boost": {
+        "Header Text": 30,
+    },
+}

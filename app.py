@@ -11,7 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from PIL import Image
 
-from specs import FORMATS, FORMAT_GROUPS, CARD_TEXT_LIMITS
+from specs import FORMATS, FORMAT_GROUPS, CARD_TEXT_LIMITS, COPY_LIMITS
 from checker import run_all_checks, CheckResult
 from fixer import apply_fixes
 from ai_checker import run_ai_checks, AICheckResult
@@ -430,12 +430,15 @@ with tab1:
 
     st.divider()
 
-    # Card text fields
+    # Copy / text field character checks (applies to any product group with defined limits)
     card_text_results: list[dict] = []
-    if format_key == "card_image":
-        st.subheader("2 · Card text fields")
-        with st.expander("Check character limits"):
-            for field_name, limit in CARD_TEXT_LIMITS.items():
+    _group = FORMATS.get(format_key, {}).get("group", "")
+    _copy_limits = COPY_LIMITS.get(_group, {})
+    if _copy_limits:
+        step_num = "2"
+        st.subheader(f"{step_num} · Copy character limits")
+        with st.expander("Check copy fields", expanded=False):
+            for field_name, limit in _copy_limits.items():
                 val = st.text_input(f"{field_name} (max {limit} chars)", key=f"ct_{field_name}")
                 if val:
                     ok = len(val) <= limit
@@ -444,10 +447,10 @@ with tab1:
                         "passed": ok,
                         "message": (
                             f"{len(val)}/{limit} chars ✓" if ok
-                            else f"{len(val)}/{limit} chars — exceeds {limit}-character limit"
+                            else f"{len(val)}/{limit} chars — exceeds limit by {len(val) - limit}"
                         ),
                     })
-        upload_label = "3 · Upload card image"
+        upload_label = "3 · Upload creative"
         st.divider()
     else:
         upload_label = "2 · Upload creative"
