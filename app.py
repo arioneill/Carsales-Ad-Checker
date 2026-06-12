@@ -437,9 +437,134 @@ with tab1:
     if _copy_limits:
         step_num = "2"
         st.subheader(f"{step_num} · Copy character limits")
-        with st.expander("Check copy fields", expanded=False):
+
+        # ── MI sheet drag-and-drop ─────────────────────────────────────────────
+        mi_file = st.file_uploader(
+            "Drop MI sheet here to auto-fill (optional)",
+            type=["xlsx", "xls"],
+            key="mi_upload",
+            help="Upload the client's MI Excel sheet to automatically populate copy fields below.",
+        )
+        if mi_file:
+            _mi_key = f"_mi_{mi_file.name}"
+            if st.session_state.get("_mi_file_id") != mi_file.name:
+                # Parse MI sheet
+                import pandas as _pd_mi
+                _raw = _pd_mi.read_excel(io.BytesIO(mi_file.read()), header=None, sheet_name=0)
+
+                # Find header row by scanning for copy-field keywords
+                _header_row = None
+                _col_map = {}
+                _KEYWORDS = {
+                    "Card Text":           ["card text (b)", "card text"],
+                    "Headline Text":       ["headline text (c)", "headline text"],
+                    "Headline":            ["headline text (c)", "headline text", "headline"],
+                    "Sub-headline Text":   ["sub-headline", "subheadline"],
+                    "Body Text":           ["body text"],
+                    "Body":                ["body text", "body"],
+                    "CTA Text":            ["cta text (e)", "cta text"],
+                    "CTA":                 ["cta text (e)", "cta text", "cta"],
+                    "Link Description (off-network only)": ["link description (d", "link description"],
+                    "Link Description":    ["link description (d", "link description"],
+                    "Advertiser Name":     ["advertiser (a)", "advertiser name", "advertiser"],
+                    "Advertiser":          ["advertiser (a)", "advertiser"],
+                    "Title":               ["title"],
+                    "Description (Desktop, all ratios)": ["description"],
+                    "Description (Mobile 1:1)":          ["description"],
+                    "Hero Image Text Link":              ["hero image text link", "text link"],
+                    "Native Tile Headline":              ["native tile headline"],
+                    "Native Tile Body Copy":             ["native tile body copy", "native tile body"],
+                    "Unmissable Bar Text":               ["unmissable bar text", "unmissable text"],
+                    "External Text Link":                ["external text link", "external link"],
+                    "Header Text":                       ["header text"],
+                    "_url": ["click through url", "click-through url", "destination url"],
+                }
+                for _ri in range(min(25, len(_raw))):
+                    _row_vals = _raw.iloc[_ri].fillna("").astype(str).str.lower().tolist()
+                    _found, _tmp = 0, {}
+                    for _ci, _cell in enumerate(_row_vals):
+                        for _label, _kws in _KEYWORDS.items():
+                            if _label not in _tmp and any(_kw in _cell for _kw in _kws):
+                                _tmp[_label] = _ci
+                                _found += 1
+                    if _found >= 3:
+                        _header_row = _ri
+                        _col_map = _tmp
+                        break
+
+                _placements = []
+                if _header_row is not None:
+                    # Primary copy column (first matching copy field in the limits)
+                    _primary_col = next(
+                        (_col_map[f] for f in _copy_limits if f in _col_map), None
+                    )
+                    if _primary_col is not None:
+                        for _ri in range(_header_row + 2, len(_raw)):
+                            _row = _raw.iloc[_ri]
+                            _pval = str(_row.iloc[_primary_col]).strip()
+                            if not _pval or _pval.lower() in ("nan", "none", ""):
+                                continue
+                            # Placement label: leftmost non-empty cell in the row
+                            _pname = ""
+                            for _ci in range(0, min(_primary_col, len(_row))):
+                                _v = str(_row.iloc[_ci]).strip()
+                                if _v and _v.lower() not in ("nan", "none", ""):
+                                    _pname = _v
+                                    break
+                            _copy_vals = {}
+                            for _field in _copy_limits:
+                                if _field in _col_map:
+                                    _v = str(_row.iloc[_col_map[_field]]).strip()
+                                    if _v and _v.lower() not in ("nan", "none", "0"):
+                                        _copy_vals[_field] = _v
+                            _url_val = ""
+                            if "_url" in _col_map:
+                                _url_val = str(_row.iloc[_col_map["_url"]]).strip()
+                                if _url_val.lower() in ("nan", "none", ""):
+                                    _url_val = ""
+                            _placements.append({
+                                "label":  _pname or f"Row {_ri + 1}",
+                                "copy":   _copy_vals,
+                                "url":    _url_val,
+                            })
+
+                st.session_state["_mi_placements"] = _placements
+                st.session_state["_mi_file_id"]    = mi_file.name
+                st.session_state["_mi_selection"]  = None
+
+            _placements = st.session_state.get("_mi_placements", [])
+            if not _placements:
+                st.warning("Could not detect copy fields in this MI sheet. Check that it matches the standard carsales MI template.")
+            else:
+                _labels = [p["label"] for p in _placements]
+                _sel_idx = st.selectbox(
+                    f"Select placement ({len(_placements)} found)",
+                    range(len(_labels)),
+                    format_func=lambda i: _labels[i],
+                    key="mi_placement_select",
+                )
+                # Pre-fill session state for each copy field when selection changes
+                if st.session_state.get("_mi_selection") != _sel_idx:
+                    st.session_state["_mi_selection"] = _sel_idx
+                    _sel = _placements[_sel_idx]
+                    for _field in _copy_limits:
+                        st.session_state[f"ct_{_field}"] = _sel["copy"].get(_field, "")
+                    if _sel["url"]:
+                        st.session_state["_mi_prefill_url"] = _sel["url"]
+                    st.rerun()
+        else:
+            # Clear MI state when file removed
+            if st.session_state.get("_mi_file_id"):
+                for _k in ["_mi_placements", "_mi_file_id", "_mi_selection", "_mi_prefill_url"]:
+                    st.session_state.pop(_k, None)
+
+        # ── Copy field inputs (pre-filled from MI if loaded) ──────────────────
+        with st.expander("Copy fields", expanded=bool(mi_file)):
             for field_name, limit in _copy_limits.items():
-                val = st.text_input(f"{field_name} (max {limit} chars)", key=f"ct_{field_name}")
+                val = st.text_input(
+                    f"{field_name} (max {limit} chars)",
+                    key=f"ct_{field_name}",
+                )
                 if val:
                     ok = len(val) <= limit
                     card_text_results.append({
