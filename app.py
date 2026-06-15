@@ -4,7 +4,7 @@ import os
 import zipfile
 import datetime
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 import re
 import streamlit as st
@@ -12,7 +12,7 @@ import streamlit.components.v1 as components
 from PIL import Image
 
 from specs import FORMATS, FORMAT_GROUPS, CARD_TEXT_LIMITS, COPY_LIMITS
-from checker import run_all_checks, CheckResult
+from checker import run_all_checks, run_video_checks, CheckResult
 from fixer import apply_fixes
 from ai_checker import run_ai_checks, AICheckResult
 from tag_parser import (
@@ -385,6 +385,30 @@ st.markdown(
 )
 st.divider()
 
+_VIDEO_EXTS: frozenset[str] = frozenset({".mp4", ".mov"})
+
+
+# ── Cached check helpers ──────────────────────────────────────────────────────
+# Streamlit re-runs the entire script on every widget change.  Without caching,
+# every interaction re-opens images and re-runs all checks from scratch.
+# @st.cache_data keys on function arguments (bytes → content hash), so the same
+# file + spec returns instantly on all subsequent renders.
+
+@st.cache_data(show_spinner=False)
+def _cached_image_checks(file_bytes: bytes, fmt: str, spec_key: str) -> list:
+    """Open image and run all checks; result cached by content + spec."""
+    spec = FORMATS[spec_key]
+    img = Image.open(io.BytesIO(file_bytes))
+    img.load()
+    return run_all_checks(img, file_bytes, fmt, spec)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_video_checks(file_bytes: bytes, filename: str, spec_key: str) -> list:
+    """Run video checks; result cached by content + spec."""
+    return run_video_checks(file_bytes, filename, FORMATS[spec_key])
+
+
 # ── Shared dimension → spec lookup (used in Multi-file and Ad Tag tabs) ───────
 _DIM_LOOKUP: dict = {}
 for _k, _s in FORMATS.items():
@@ -430,7 +454,7 @@ def _expand_creative_uploads(files) -> list[tuple[str, bytes]]:
                         bn = os.path.basename(zi.filename)
                         if zi.filename.startswith("__MACOSX") or bn.startswith("."):
                             continue
-                        if any(bn.lower().endswith(x) for x in (".jpg", ".jpeg", ".png", ".gif")):
+                        if any(bn.lower().endswith(x) for x in (".jpg", ".jpeg", ".png", ".gif", ".mp4", ".mov")):
                             out.append((bn, zf.read(zi)))
             except Exception:
                 pass
@@ -593,23 +617,40 @@ with tab1:
 
     with st.expander("View spec requirements"):
         c1, c2, c3 = st.columns(3)
-        if spec["dimensions"]:
-            c1.metric("Dimensions", f"{spec['dimensions'][0]}×{spec['dimensions'][1]}px")
-        elif spec.get("aspect_ratio"):
-            c1.metric("Aspect Ratio", spec["aspect_ratio"])
+        if spec.get("is_video"):
+            c1.metric("Formats", " / ".join(spec.get("video_formats") or []))
+            c2.metric("Max File Size", f"{spec.get('video_max_size_mb')} MB")
+            _dur_min = spec.get("video_min_duration_s")
+            _dur_max = spec.get("video_max_duration_s")
+            c3.metric("Duration", f"{_dur_min}–{_dur_max}s")
+            if spec.get("video_aspect_ratios"):
+                d1, d2, d3 = st.columns(3)
+                d1.metric("Aspect Ratios", " or ".join(spec["video_aspect_ratios"]))
+                if spec.get("video_min_px") and spec.get("video_max_px"):
+                    d2.metric("Min Resolution", f"{spec['video_min_px']}px")
+                    d3.metric("Max Resolution", f"{spec['video_max_px']}px")
+                elif spec.get("video_min_resolution") and spec.get("video_max_resolution"):
+                    d2.metric("Min Resolution", f"{spec['video_min_resolution'][0]}×{spec['video_min_resolution'][1]}")
+                    d3.metric("Max Resolution", f"{spec['video_max_resolution'][0]}×{spec['video_max_resolution'][1]}")
+            st.info("Also required (manual verification): H.264 codec · Max 25fps · 720p+ recommended")
         else:
-            c1.metric("Dimensions", "Any")
-        c2.metric("Max File Size", f"{spec['max_file_size_kb']} KB")
-        c3.metric("Formats", " / ".join(spec["accepted_formats"]))
-        if spec.get("animation_max_seconds"):
-            d1, d2, d3 = st.columns(3)
-            d1.metric("Max Animation", f"{spec['animation_max_seconds']}s")
-            d2.metric("Max Plays", str(spec["animation_max_plays"]) if spec.get("animation_max_plays") else "Unlimited")
-            d3.metric("Max FPS", str(spec["max_fps"]))
-        if spec.get("clear_zone_top_px"):
-            st.warning(f"⚠️  Clear zone: top **{spec['clear_zone_top_px']}px** must contain no copy or logos.")
-        if spec.get("logo_white_bg_required"):
-            st.info("Logo must be on a **white or transparent** background.")
+            if spec["dimensions"]:
+                c1.metric("Dimensions", f"{spec['dimensions'][0]}×{spec['dimensions'][1]}px")
+            elif spec.get("aspect_ratio"):
+                c1.metric("Aspect Ratio", spec["aspect_ratio"])
+            else:
+                c1.metric("Dimensions", "Any")
+            c2.metric("Max File Size", f"{spec['max_file_size_kb']} KB")
+            c3.metric("Formats", " / ".join(spec["accepted_formats"]))
+            if spec.get("animation_max_seconds"):
+                d1, d2, d3 = st.columns(3)
+                d1.metric("Max Animation", f"{spec['animation_max_seconds']}s")
+                d2.metric("Max Plays", str(spec["animation_max_plays"]) if spec.get("animation_max_plays") else "Unlimited")
+                d3.metric("Max FPS", str(spec["max_fps"]))
+            if spec.get("clear_zone_top_px"):
+                st.warning(f"⚠️  Clear zone: top **{spec['clear_zone_top_px']}px** must contain no copy or logos.")
+            if spec.get("logo_white_bg_required"):
+                st.info("Logo must be on a **white or transparent** background.")
 
     st.divider()
 
@@ -764,19 +805,86 @@ with tab1:
         upload_label = "2 · Upload creative"
 
     st.subheader(upload_label)
-    uploaded = st.file_uploader("JPEG, PNG or GIF", type=["jpg", "jpeg", "png", "gif"], key="t1_upload")
+    uploaded = st.file_uploader(
+        "JPEG, PNG, GIF, MP4 or MOV",
+        type=["jpg", "jpeg", "png", "gif", "mp4", "mov"],
+        key="t1_upload",
+    )
 
     if not uploaded:
         st.info("Upload a file above to run checks.")
     else:
         file_bytes = uploaded.read()
-        try:
-            img = Image.open(io.BytesIO(file_bytes))
-            img.load()
-            load_ok = True
-        except Exception as e:
-            st.error(f"Could not open image: {e}")
-            load_ok = False
+        _t1_ext = os.path.splitext(uploaded.name)[1].lower()
+        _t1_is_video = _t1_ext in _VIDEO_EXTS
+
+        if _t1_is_video and not spec.get("is_video"):
+            st.error(
+                f"**{uploaded.name}** is a video file, but **{spec['name']}** is an image spec.  "
+                "Change the format group to **In Feed Video** or **Outstream Video** and select the Video File spec."
+            )
+        elif not _t1_is_video and spec.get("is_video"):
+            st.error(
+                f"**{spec['name']}** requires a video file. Please upload an MP4 or MOV."
+            )
+        elif _t1_is_video:
+            # ── Video file + video spec ──────────────────────────────────────
+            st.divider()
+            _size_mb = len(file_bytes) / (1024 * 1024)
+            _info_col1, _info_col2 = st.columns([1, 2])
+            with _info_col1:
+                st.markdown("### 🎬")
+                st.caption("Video — no preview available")
+            with _info_col2:
+                st.markdown("**File info**")
+                st.write(f"**Name:** `{uploaded.name}`")
+                st.write(f"**Format:** `{_t1_ext.lstrip('.').upper()}`")
+                st.write(f"**Size:** `{_size_mb:.2f} MB`")
+
+            st.divider()
+            _vchks = _cached_video_checks(file_bytes, uploaded.name, format_key)
+            _vfailed = [c for c in _vchks if not c.passed]
+            _vclient = [c for c in _vfailed if c.needs_client]
+
+            st.subheader("Results")
+            if not _vfailed:
+                st.success("All checks passed ✓  Creative is ready to submit.")
+            elif _vclient:
+                st.error(f"{len(_vclient)} issue{'s' if len(_vclient)!=1 else ''} — need client revision")
+            else:
+                st.warning(f"{len(_vfailed)} issue{'s' if len(_vfailed)!=1 else ''} detected")
+
+            for _c in _vchks:
+                _icon = "✅" if _c.passed else "❌"
+                st.markdown(f"{_icon} &nbsp; **{_c.name}:** {_c.message}")
+
+            _manual_items = "- **Codec:** H.264 required\n- **Frame rate:** Max 25fps\n- **Resolution:** 720p (1280×720) or above recommended"
+            if "Outstream" in spec["name"]:
+                _manual_items += "\n- **Audio:** Must be user-initiated (muted by default)"
+            st.divider()
+            st.subheader("Manual verification checklist")
+            st.info(_manual_items)
+
+            if _vfailed:
+                st.divider()
+                with st.expander("📋 Generate client feedback email", expanded=False):
+                    _vid_feedback = [{
+                        "filename":       uploaded.name,
+                        "spec_name":      spec["name"],
+                        "client_checks":  _vclient,
+                        "fixable_checks": [],
+                    }]
+                    feedback_ui(_vid_feedback, "t1_vid")
+
+        # ── Image file + image spec ──────────────────────────────────────────
+        load_ok = False
+        if (not _t1_is_video) and (not spec.get("is_video")):
+            try:
+                img = Image.open(io.BytesIO(file_bytes))
+                img.load()
+                load_ok = True
+            except Exception as e:
+                st.error(f"Could not open image: {e}")
 
         if load_ok:
             img_format: str = (
@@ -800,7 +908,7 @@ with tab1:
 
             st.divider()
 
-            checks      = run_all_checks(img, file_bytes, img_format, spec)
+            checks      = _cached_image_checks(file_bytes, img_format, format_key)
             failed      = [c for c in checks if not c.passed]
             fixable     = [c for c in failed if c.fixable]
             tech_client = [c for c in failed if c.needs_client]
@@ -933,8 +1041,8 @@ with tab2:
     st.caption("Upload multiple creatives at once — each file is automatically matched to its spec by dimensions. No ZIP needed.")
 
     uploaded_files = st.file_uploader(
-        "JPEG, PNG or GIF — select as many files as you like",
-        type=["jpg", "jpeg", "png", "gif"],
+        "JPEG, PNG, GIF, MP4 or MOV — select as many files as you like",
+        type=["jpg", "jpeg", "png", "gif", "mp4", "mov"],
         accept_multiple_files=True,
         key="mf_upload",
     )
@@ -945,10 +1053,14 @@ with tab2:
         # Dimension → spec lookup (shared module-level dict)
         dim_lookup = _DIM_LOOKUP
 
-        # Load all files
+        # Load all files — separate image and video files
         file_data = []
+        video_data = []
         for uf in uploaded_files:
             fb = uf.read()
+            if os.path.splitext(uf.name)[1].lower() in _VIDEO_EXTS:
+                video_data.append({"uf": uf, "fb": fb})
+                continue
             try:
                 im = Image.open(io.BytesIO(fb))
                 im.load()
@@ -969,9 +1081,11 @@ with tab2:
         n_errors       = sum(1 for f in file_data if f["error"])
 
         sm1, sm2, sm3 = st.columns(3)
-        sm1.metric("Files uploaded", len(file_data))
-        sm2.metric("Format matched", n_matched)
+        sm1.metric("Files uploaded", len(file_data) + len(video_data))
+        sm2.metric("Images matched", n_matched)
         sm3.metric("Unrecognised",   n_unrecognised + n_errors)
+        if video_data:
+            st.info(f"{len(video_data)} video file{'s' if len(video_data)!=1 else ''} detected — see video checks below.")
         st.divider()
 
         # Per-file results — also collect issues for feedback
@@ -1017,7 +1131,7 @@ with tab2:
                             )
 
                         mf_spec   = FORMATS[spec_key]
-                        mf_checks = run_all_checks(fd["img"], fd["fb"], fd["fmt"], mf_spec)
+                        mf_checks = _cached_image_checks(fd["fb"], fd["fmt"], spec_key)
                         mf_failed  = [c for c in mf_checks if not c.passed]
                         mf_fixable = [c for c in mf_failed if c.fixable]
                         mf_client  = [c for c in mf_failed if c.needs_client]
@@ -1071,6 +1185,38 @@ with tab2:
                 )
                 feedback_ui(all_issues_mf, "mf")
 
+        # ── Video files ────────────────────────────────────────────────────────
+        _VIDEO_SPEC_CHOICES = [k for k in ["in_feed_video_file", "outstream_video_file"] if k in FORMATS]
+        if video_data:
+            st.divider()
+            st.subheader("Video files")
+            for _vi, _vd in enumerate(video_data):
+                _vuf = _vd["uf"]; _vfb = _vd["fb"]
+                _vext = os.path.splitext(_vuf.name)[1].lower()
+                _vfmt = _vext.lstrip(".").upper()
+                _vmb  = len(_vfb) / (1024 * 1024)
+                with st.expander(f"🎬 {_vuf.name} — {_vfmt}, {_vmb:.2f} MB", expanded=(len(video_data) <= 3)):
+                    _default_vspec = "outstream_video_file" if _vext == ".mov" else "in_feed_video_file"
+                    _vspec_key = st.selectbox(
+                        "Video spec",
+                        _VIDEO_SPEC_CHOICES,
+                        index=_VIDEO_SPEC_CHOICES.index(_default_vspec) if _default_vspec in _VIDEO_SPEC_CHOICES else 0,
+                        format_func=lambda k: FORMATS[k]["name"],
+                        key=f"mf_vspec_{_vi}",
+                    )
+                    _vspec = FORMATS[_vspec_key]
+                    _vchks = _cached_video_checks(_vfb, _vuf.name, _vspec_key)
+                    _vfailed_mf = [c for c in _vchks if not c.passed]
+                    if not _vfailed_mf:
+                        st.success("All checks passed ✓")
+                    else:
+                        st.error(f"{len(_vfailed_mf)} issue{'s' if len(_vfailed_mf)!=1 else ''}")
+                    for _vc in _vchks:
+                        _vi_icon = "✅" if _vc.passed else "❌"
+                        st.markdown(f"{_vi_icon} **{_vc.name}:** {_vc.message}")
+                    st.info("Also verify manually: H.264 codec · max 25fps · 720p+ recommended" +
+                            (" · audio user-initiated" if "Outstream" in _vspec["name"] else ""))
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — ZIP bundle
@@ -1098,6 +1244,7 @@ with tab3:
         IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif"}
 
         images: dict[str, tuple] = {}
+        zip_videos: list[tuple[str, bytes]] = []
         bad_files: list[str] = []
 
         try:
@@ -1106,10 +1253,16 @@ with tab3:
                     if name.endswith("/"):
                         continue
                     ext = os.path.splitext(name)[1].lower()
-                    if ext not in IMAGE_EXTS:
-                        continue
                     basename = os.path.basename(name)
                     if not basename or basename.startswith(".") or basename.startswith("__"):
+                        continue
+                    if ext in _VIDEO_EXTS:
+                        try:
+                            zip_videos.append((basename, zf.read(name)))
+                        except Exception:
+                            bad_files.append(basename)
+                        continue
+                    if ext not in IMAGE_EXTS:
                         continue
                     try:
                         fb = zf.read(name)
@@ -1151,7 +1304,7 @@ with tab3:
                     if found:
                         fname, fb, im, fmt, basename = found
                         matched.add(fname)
-                        chks = run_all_checks(im, fb, fmt, s)
+                        chks = _cached_image_checks(fb, fmt, spec_key)
                         results[spec_key] = {
                             "filename": basename,
                             "checks":   chks,
@@ -1226,6 +1379,36 @@ with tab3:
                             "found in the ZIP."
                         )
                         feedback_ui(zip_issues, "zp")
+
+                # ── Video files in ZIP ────────────────────────────────────────
+                _ZIP_VSPEC_CHOICES = [k for k in ["in_feed_video_file", "outstream_video_file"] if k in FORMATS]
+                if zip_videos:
+                    st.divider()
+                    st.markdown("### Video files in ZIP")
+                    for _zvi, (_zvname, _zvbytes) in enumerate(zip_videos):
+                        _zvext  = os.path.splitext(_zvname)[1].lower()
+                        _zvfmt  = _zvext.lstrip(".").upper()
+                        _zvmb   = len(_zvbytes) / (1024 * 1024)
+                        with st.expander(f"🎬 {_zvname} — {_zvfmt}, {_zvmb:.2f} MB"):
+                            _zvdef = "outstream_video_file" if _zvext == ".mov" else "in_feed_video_file"
+                            _zvsk = st.selectbox(
+                                "Video spec",
+                                _ZIP_VSPEC_CHOICES,
+                                index=_ZIP_VSPEC_CHOICES.index(_zvdef) if _zvdef in _ZIP_VSPEC_CHOICES else 0,
+                                format_func=lambda k: FORMATS[k]["name"],
+                                key=f"zp_vspec_{_zvi}",
+                            )
+                            _zvchks = _cached_video_checks(_zvbytes, _zvname, _zvsk)
+                            _zvfail = [c for c in _zvchks if not c.passed]
+                            if not _zvfail:
+                                st.success("All checks passed ✓")
+                            else:
+                                st.error(f"{len(_zvfail)} issue{'s' if len(_zvfail)!=1 else ''}")
+                            for _zvc in _zvchks:
+                                _zv_icon = "✅" if _zvc.passed else "❌"
+                                st.markdown(f"{_zv_icon} **{_zvc.name}:** {_zvc.message}")
+                            st.info("Also verify manually: H.264 codec · max 25fps · 720p+ recommended" +
+                                    (" · audio user-initiated" if "Outstream" in FORMATS[_zvsk]["name"] else ""))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1485,7 +1668,7 @@ with tab4:
 
                                         if c_spec_key:
                                             c_spec = FORMATS[c_spec_key]
-                                            c_chks = run_all_checks(c_img, c_bytes, c_fmt, c_spec)
+                                            c_chks = _cached_image_checks(c_bytes, c_fmt, c_spec_key)
                                             c_fail = [c for c in c_chks if not c.passed]
                                             c_fix  = [c for c in c_fail if c.fixable]
                                             c_cli  = [c for c in c_fail if c.needs_client]
@@ -1973,7 +2156,7 @@ with tab4:
 
                         if tag_spec_key:
                             tag_spec   = FORMATS[tag_spec_key]
-                            tag_checks = run_all_checks(tag_img, tag_bytes, tag_fmt, tag_spec)
+                            tag_checks = _cached_image_checks(tag_bytes, tag_fmt, tag_spec_key)
                             tag_failed  = [c for c in tag_checks if not c.passed]
                             tag_fixable = [c for c in tag_failed if c.fixable]
                             tag_client  = [c for c in tag_failed if c.needs_client]
@@ -2115,8 +2298,8 @@ with tab_camp:
     # ── Step 2: Creative assets ───────────────────────────────────────────────
     st.subheader("2 · Creative assets")
     camp_creative_ups = st.file_uploader(
-        "Upload images or ZIP — multiple files supported",
-        type=["jpg", "jpeg", "png", "gif", "zip"],
+        "Upload creatives or ZIP — images and video supported",
+        type=["jpg", "jpeg", "png", "gif", "mp4", "mov", "zip"],
         accept_multiple_files=True,
         key="camp_creatives_up",
     )
@@ -2124,7 +2307,7 @@ with tab_camp:
     _expanded_files: list[tuple[str, bytes]] = []
     if camp_creative_ups:
         _expanded_files = _expand_creative_uploads(camp_creative_ups)
-        st.caption(f"{len(_expanded_files)} image file{'s' if len(_expanded_files) != 1 else ''} ready")
+        st.caption(f"{len(_expanded_files)} creative file{'s' if len(_expanded_files) != 1 else ''} ready")
 
         # Show auto-match preview against MI placements if available
         if camp_placements:
@@ -2211,22 +2394,40 @@ with tab_camp:
                     _res["creative_file"] = _fname
                     if _p.get("spec_key"):
                         _spec = FORMATS[_p["spec_key"]]
-                        try:
-                            _img = Image.open(io.BytesIO(_fbytes)); _img.load()
-                            _fmt = _img.format or "JPEG"
-                            _chks = run_all_checks(_img, _fbytes, _fmt, _spec)
-                            _fail = [c for c in _chks if not c.passed]
-                            _res["creative"] = {
-                                "dims":    f"{_img.size[0]}×{_img.size[1]}px",
-                                "checks":  _chks,
-                                "failed":  _fail,
-                                "fixable": [c for c in _fail if c.fixable],
-                                "client":  [c for c in _fail if c.needs_client],
-                                "bytes":   _fbytes,
-                                "fmt":     _fmt,
-                            }
-                        except Exception as _e:
-                            _res["creative"] = {"error": str(_e)}
+                        _fext_c = os.path.splitext(_fname)[1].lower()
+                        if _fext_c in _VIDEO_EXTS:
+                            try:
+                                _chks = _cached_video_checks(_fbytes, _fname, _p["spec_key"])
+                                _fail = [c for c in _chks if not c.passed]
+                                _res["creative"] = {
+                                    "dims":    f"{_fext_c.lstrip('.').upper()} video",
+                                    "checks":  _chks,
+                                    "failed":  _fail,
+                                    "fixable": [],
+                                    "client":  [c for c in _fail if c.needs_client],
+                                    "bytes":   _fbytes,
+                                    "fmt":     _fext_c.lstrip(".").upper(),
+                                    "is_video": True,
+                                }
+                            except Exception as _e:
+                                _res["creative"] = {"error": str(_e)}
+                        else:
+                            try:
+                                _img = Image.open(io.BytesIO(_fbytes)); _img.load()
+                                _fmt = _img.format or "JPEG"
+                                _chks = _cached_image_checks(_fbytes, _fmt, _p["spec_key"])
+                                _fail = [c for c in _chks if not c.passed]
+                                _res["creative"] = {
+                                    "dims":    f"{_img.size[0]}×{_img.size[1]}px",
+                                    "checks":  _chks,
+                                    "failed":  _fail,
+                                    "fixable": [c for c in _fail if c.fixable],
+                                    "client":  [c for c in _fail if c.needs_client],
+                                    "bytes":   _fbytes,
+                                    "fmt":     _fmt,
+                                }
+                            except Exception as _e:
+                                _res["creative"] = {"error": str(_e)}
                     else:
                         _res["creative"] = {"no_spec": True}
 
@@ -2353,6 +2554,10 @@ with tab_camp:
                             for _chk in _c["failed"]:
                                 _fix_icon = "🔧" if _chk.fixable else "❌"
                                 st.markdown(f"{_fix_icon} {_chk.message}")
+                        if _c.get("is_video"):
+                            _spec_nm = FORMATS.get(_r.get("spec_key",""), {}).get("name","")
+                            st.caption("Manual: H.264 · max 25fps · 720p+"
+                                       + (" · audio user-initiated" if "Outstream" in _spec_nm else ""))
                         if _c.get("fixable"):
                             if st.button("Apply fixes & download", key=f"camp_fix_{_r['name']}"):
                                 with st.spinner("Fixing…"):

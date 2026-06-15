@@ -241,6 +241,207 @@ def check_logo_background(img: Image.Image, spec: dict) -> CheckResult:
     )
 
 
+def _parse_video_meta(data: bytes) -> dict:
+    """Extract width, height, and duration from MP4/MOV bytes via box parsing."""
+    import struct
+    result: dict = {"width": None, "height": None, "duration_s": None}
+    n = len(data)
+
+    def iter_boxes(start: int, end: int):
+        pos = start
+        while pos + 8 <= end:
+            try:
+                size = struct.unpack_from(">I", data, pos)[0]
+            except struct.error:
+                break
+            btype = data[pos + 4: pos + 8].decode("latin-1", errors="replace")
+            if size == 1:
+                if pos + 16 > end:
+                    break
+                size = int(struct.unpack_from(">Q", data, pos + 8)[0])
+                header = 16
+            elif size == 0:
+                size = end - pos
+                header = 8
+            else:
+                header = 8
+            if size < header or pos + size > end or size > 200_000_000:
+                break
+            yield btype, pos + header, pos + size
+            pos += size
+
+    moov_d, moov_e = None, None
+    for btype, bd, be in iter_boxes(0, n):
+        if btype == "moov":
+            moov_d, moov_e = bd, be
+            break
+
+    if moov_d is None:
+        return result
+
+    for btype, bd, be in iter_boxes(moov_d, moov_e):
+        if btype == "mvhd":
+            try:
+                version = data[bd]
+                if version == 0:
+                    timescale = struct.unpack_from(">I", data, bd + 12)[0]
+                    duration  = struct.unpack_from(">I", data, bd + 16)[0]
+                else:
+                    timescale = struct.unpack_from(">I", data, bd + 20)[0]
+                    duration  = int(struct.unpack_from(">Q", data, bd + 24)[0])
+                if timescale:
+                    result["duration_s"] = duration / timescale
+            except (struct.error, IndexError):
+                pass
+            break
+
+    for btype, bd, be in iter_boxes(moov_d, moov_e):
+        if btype != "trak":
+            continue
+        for btype2, bd2, be2 in iter_boxes(bd, be):
+            if btype2 == "tkhd":
+                try:
+                    version = data[bd2]
+                    if version == 0:
+                        w_fp = struct.unpack_from(">I", data, bd2 + 76)[0]
+                        h_fp = struct.unpack_from(">I", data, bd2 + 80)[0]
+                    else:
+                        w_fp = struct.unpack_from(">I", data, bd2 + 88)[0]
+                        h_fp = struct.unpack_from(">I", data, bd2 + 92)[0]
+                    w = w_fp >> 16
+                    h = h_fp >> 16
+                    if w > 0 and h > 0:
+                        result["width"] = w
+                        result["height"] = h
+                except (struct.error, IndexError):
+                    pass
+                break
+        if result["width"] is not None:
+            break
+
+    return result
+
+
+def run_video_checks(file_bytes: bytes, filename: str, spec: dict) -> list[CheckResult]:
+    """Run checks on a video creative file (MP4/MOV)."""
+    results: list[CheckResult] = []
+
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    file_fmt = ext.upper()
+
+    # 1. Video format
+    accepted_fmts = spec.get("video_formats") or []
+    fmt_ok = file_fmt in accepted_fmts
+    results.append(CheckResult(
+        name="Video Format",
+        passed=fmt_ok,
+        message=f"{file_fmt} ✓" if fmt_ok else f"{file_fmt} — must be {' or '.join(accepted_fmts)}",
+        needs_client=not fmt_ok,
+    ))
+
+    # 2. File size
+    max_mb = spec.get("video_max_size_mb")
+    if max_mb:
+        size_mb = len(file_bytes) / (1024 * 1024)
+        size_ok = size_mb <= max_mb
+        results.append(CheckResult(
+            name="File Size",
+            passed=size_ok,
+            message=f"{size_mb:.1f} MB {'✓' if size_ok else f'— exceeds {max_mb} MB limit (client must reduce)'}",
+            needs_client=not size_ok,
+        ))
+
+    # 3. Parse metadata
+    meta = _parse_video_meta(file_bytes)
+    dims_ok = meta["width"] is not None and meta["height"] is not None
+    dur_ok  = meta["duration_s"] is not None
+
+    # 4. Aspect ratio + resolution
+    if dims_ok:
+        w, h = meta["width"], meta["height"]
+        accepted_ratios = spec.get("video_aspect_ratios") or []
+        if accepted_ratios:
+            ratio_ok = False
+            for ar in accepted_ratios:
+                if ar == "16:9" and w > 0 and h > 0 and abs((w / h) - (16 / 9)) < 0.02:
+                    ratio_ok = True; break
+                elif ar == "1:1" and w == h:
+                    ratio_ok = True; break
+            results.append(CheckResult(
+                name="Aspect Ratio",
+                passed=ratio_ok,
+                message=(
+                    f"{w}×{h}px ✓" if ratio_ok
+                    else f"{w}×{h}px — required {' or '.join(accepted_ratios)}"
+                ),
+                needs_client=not ratio_ok,
+            ))
+
+        min_px = spec.get("video_min_px")
+        max_px = spec.get("video_max_px")
+        if min_px is not None or max_px is not None:
+            short, long_ = min(w, h), max(w, h)
+            res_ok = (min_px is None or short >= min_px) and (max_px is None or long_ <= max_px)
+            parts = []
+            if not res_ok:
+                if min_px and short < min_px:
+                    parts.append(f"min {min_px}px on shortest side")
+                if max_px and long_ > max_px:
+                    parts.append(f"max {max_px}px exceeded")
+            results.append(CheckResult(
+                name="Resolution",
+                passed=res_ok,
+                message=f"{w}×{h}px {'✓' if res_ok else '— ' + ', '.join(parts)}",
+                needs_client=not res_ok,
+            ))
+
+        min_res = spec.get("video_min_resolution")
+        max_res = spec.get("video_max_resolution")
+        if min_res or max_res:
+            res_ok = True
+            parts = []
+            if min_res and (w < min_res[0] or h < min_res[1]):
+                res_ok = False
+                parts.append(f"min {min_res[0]}×{min_res[1]}px")
+            if max_res and (w > max_res[0] or h > max_res[1]):
+                res_ok = False
+                parts.append(f"max {max_res[0]}×{max_res[1]}px")
+            results.append(CheckResult(
+                name="Resolution",
+                passed=res_ok,
+                message=f"{w}×{h}px {'✓' if res_ok else '— ' + ' / '.join(parts) + ' required'}",
+                needs_client=not res_ok,
+            ))
+    else:
+        results.append(CheckResult(
+            name="Dimensions",
+            passed=True,
+            message="Could not parse video metadata — verify dimensions manually",
+        ))
+
+    # 5. Duration
+    if dur_ok:
+        d = meta["duration_s"]
+        min_d = spec.get("video_min_duration_s")
+        max_d = spec.get("video_max_duration_s")
+        d_ok = (min_d is None or d >= min_d) and (max_d is None or d <= max_d)
+        range_str = f"{min_d}–{max_d}s" if (min_d and max_d) else ""
+        results.append(CheckResult(
+            name="Duration",
+            passed=d_ok,
+            message=f"{d:.1f}s {'✓' if d_ok else f'— required {range_str} (client must fix)'}",
+            needs_client=not d_ok,
+        ))
+    else:
+        results.append(CheckResult(
+            name="Duration",
+            passed=True,
+            message="Could not parse duration — verify 6–15s manually",
+        ))
+
+    return results
+
+
 def run_all_checks(img: Image.Image, file_bytes: bytes, fmt: str, spec: dict) -> list[CheckResult]:
     results: list[CheckResult] = []
     results.append(check_dimensions(img, spec))

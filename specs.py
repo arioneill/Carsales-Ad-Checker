@@ -4,7 +4,11 @@
 def _spec(name, group, dimensions, accepted_formats, max_file_size_kb,
           animation_max_seconds=None, animation_max_plays=None, max_fps=None,
           border=False, aspect_ratio=None, clear_zone_top_px=None,
-          logo_white_bg_required=False):
+          logo_white_bg_required=False,
+          is_video=False, video_formats=None, video_max_size_mb=None,
+          video_min_duration_s=None, video_max_duration_s=None,
+          video_aspect_ratios=None, video_min_px=None, video_max_px=None,
+          video_min_resolution=None, video_max_resolution=None):
     return {
         "name": name,
         "group": group,
@@ -18,6 +22,16 @@ def _spec(name, group, dimensions, accepted_formats, max_file_size_kb,
         "aspect_ratio": aspect_ratio,
         "clear_zone_top_px": clear_zone_top_px,
         "logo_white_bg_required": logo_white_bg_required,
+        "is_video": is_video,
+        "video_formats": video_formats,
+        "video_max_size_mb": video_max_size_mb,
+        "video_min_duration_s": video_min_duration_s,
+        "video_max_duration_s": video_max_duration_s,
+        "video_aspect_ratios": video_aspect_ratios,
+        "video_min_px": video_min_px,
+        "video_max_px": video_max_px,
+        "video_min_resolution": video_min_resolution,
+        "video_max_resolution": video_max_resolution,
     }
 
 
@@ -217,6 +231,15 @@ FORMATS = {
     ),
 
     # ── IN FEED VIDEO ─────────────────────────────────────────────────────────
+    "in_feed_video_file": _spec(
+        "In Feed Video — Video File (MP4)", "In Feed Video",
+        None, ["MP4"], 25 * 1024,
+        is_video=True, video_formats=["MP4"],
+        video_max_size_mb=25,
+        video_min_duration_s=6, video_max_duration_s=15,
+        video_aspect_ratios=["1:1", "16:9"],
+        video_min_px=500, video_max_px=1920,
+    ),
     "in_feed_video_logo": _spec(
         "In Feed Video — Logo (200×200)", "In Feed Video",
         (200, 200), ["JPEG", "PNG"], 100,
@@ -224,10 +247,19 @@ FORMATS = {
     ),
 
     # ── OUTSTREAM VIDEO ──────────────────────────────────────────────────────
-    # End frame is the only image asset; video itself is not checked here
+    "outstream_video_file": _spec(
+        "Outstream Video — Video File (MP4 or MOV)", "Outstream Video",
+        None, ["MP4", "MOV"], 5 * 1024,
+        is_video=True, video_formats=["MP4", "MOV"],
+        video_max_size_mb=5,
+        video_min_duration_s=6, video_max_duration_s=15,
+        video_aspect_ratios=["16:9"],
+        video_min_resolution=(640, 360), video_max_resolution=(1920, 1080),
+    ),
     "outstream_end_frame": _spec(
         "Outstream Video — End Frame (16:9, up to 100KB)", "Outstream Video",
         None, ["JPEG", "PNG"], 100,
+        aspect_ratio="16:9",
     ),
 
     # ── GUARANTEED CONSIDERATION ─────────────────────────────────────────────
