@@ -26,8 +26,7 @@ from tag_parser import (
 # ══════════════════════════════════════════════════════════════════════════════
 
 _ACTION_HINTS: dict[str, str] = {
-    "resize":     "Please resize to the correct dimensions.",
-    "compress":   "Please reduce the file size to meet the limit.",
+"compress":   "Please reduce the file size to meet the limit.",
     "convert":    "Please convert to the required file format.",
     "add_border": "Please add a 1px solid border around the creative.",
 }

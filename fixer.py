@@ -10,9 +10,6 @@ def _to_rgb(img: Image.Image) -> Image.Image:
     return img
 
 
-def resize_image(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
-    return img.resize((target_w, target_h), Image.LANCZOS)
-
 
 def add_border(img: Image.Image, colour: tuple[int, int, int] = (160, 160, 160)) -> Image.Image:
     out = _to_rgb(img).copy()
@@ -72,13 +69,7 @@ def apply_fixes(
         current_fmt = target
         applied.append(f"Converted format to {target}")
 
-    # 2. Resize
-    if "resize" in fix_map and spec.get("dimensions"):
-        tw, th = spec["dimensions"]
-        img = resize_image(img, tw, th)
-        applied.append(f"Resized to {tw}×{th}px")
-
-    # 3. Border
+    # 2. Border
     if "add_border" in fix_map:
         img = add_border(img)
         applied.append("Added 1px grey border")

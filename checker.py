@@ -45,9 +45,9 @@ def check_dimensions(img: Image.Image, spec: dict) -> CheckResult:
         name="Dimensions",
         passed=passed,
         message=f"{w}×{h}px {'✓' if passed else f'— required {ew}×{eh}px'}",
-        fixable=not passed and not is_animated,
-        fix_action="resize" if (not passed and not is_animated) else None,
-        needs_client=not passed and is_animated,
+        fixable=False,
+        fix_action=None,
+        needs_client=not passed,
     )
 
 
