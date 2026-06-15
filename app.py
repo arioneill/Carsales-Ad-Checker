@@ -159,12 +159,20 @@ def feedback_ui(items: list[dict], key_prefix: str, default_campaign: str = "") 
 
     text = build_feedback(items, campaign)
 
+    # When the auto-generated text changes (e.g. fixes applied, new file, AI checks ran),
+    # push the new text into the textarea's session state so it re-renders with updated content.
+    # User edits are preserved as long as the underlying check results haven't changed.
+    _base_key = f"{key_prefix}_email_base"
+    _area_key = f"{key_prefix}_textarea"
+    if st.session_state.get(_base_key) != text:
+        st.session_state[_base_key] = text
+        st.session_state[_area_key] = text
+
     # Editable preview — user can tweak before sending
     edited = st.text_area(
         "Edit before sending:",
-        value=text,
         height=420,
-        key=f"{key_prefix}_textarea",
+        key=_area_key,
     )
 
     col_btn, col_tip = st.columns([2, 3])
