@@ -71,6 +71,11 @@ def parse_tag(html: str) -> TagParseResult:
         if m:
             r.creative_url = m.group(1).strip()
 
+    # CM360 Standard Tag: the <img src> is a tracking pixel (ddm/trackimp), not the creative.
+    # Clear it so callers don't try to download a 1×1 pixel and run spec checks on it.
+    if r.creative_url and re.search(r'doubleclick\.net/ddm/track', r.creative_url, re.I):
+        r.creative_url = None
+
     # ── Click URL ─────────────────────────────────────────────────────────────
     # <a href="...">
     m = re.search(r'<a\b[^>]+href=["\']([^"\']+)["\']', html, re.I)
@@ -92,12 +97,21 @@ def parse_tag(html: str) -> TagParseResult:
         if m:
             r.click_url = m.group(1).strip()
 
-    # ── Notes for JS-rendered tags ────────────────────────────────────────────
+    # ── Notes ─────────────────────────────────────────────────────────────────
+    # JS-rendered tags have no static creative URL
     if r.tag_type in ("CM360 ins (JavaScript)", "CM360 script", "JavaScript") and not r.creative_url:
         r.notes.append(
             "This tag renders the creative dynamically via JavaScript — "
             "there is no static image URL to download. "
             "Ask the client for a static backup image (JPEG/GIF) for spec checking."
+        )
+
+    # CM360 standard display tag — creative is served by CM360, not a static file
+    if r.tag_type in ("CM360 iFrame", "CM360 script") and not r.creative_url and not r.notes:
+        r.notes.append(
+            "CM360 standard display tag — the creative is served dynamically by CM360 "
+            "and cannot be downloaded for spec checking. "
+            "Upload the actual banner files to the Single file or Multi-file tab instead."
         )
 
     return r

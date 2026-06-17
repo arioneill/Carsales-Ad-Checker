@@ -4,7 +4,7 @@ import os
 import zipfile
 import datetime
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 
 import re
 import streamlit as st
@@ -576,8 +576,8 @@ def _parse_camp_tags(file_bytes: bytes) -> dict:
                 if kw.lower() in h.lower(): return ci
         return min(default, n - 1)
     idx_name = _fc(["placement name"], 8)
-    idx_r    = _fc(["impression tag (image)"], 17)
-    idx_v    = _fc(["click tag"], 21)
+    idx_r    = _fc(["standard tag", "iframes/javascript tag", "impression tag (image)", "javascript tag"], 13)
+    idx_v    = _fc(["click tag", "click through url", "click url"], n - 1)
     def _c(row, idx):
         try:
             v = str(row.iloc[idx]).strip()
@@ -1466,7 +1466,8 @@ with tab4:
                         header_row_idx = ri
                         break
 
-                # Pull advertiser/campaign name from CM360 metadata rows (label in col B, value in col I)
+                # Pull advertiser/campaign from CM360 metadata rows (label in col B, value in col I)
+                # or from the first data row (CM360 exports put Advertiser Name in col C, Campaign Name in col E)
                 for _ri in range(min(header_row_idx, 15)):
                     _row   = raw.iloc[_ri].fillna("").astype(str).tolist()
                     _label = _row[1].lower() if len(_row) > 1 else ""
@@ -1475,6 +1476,22 @@ with tab4:
                         camp_meta["advertiser"] = _val
                     elif "campaign name" in _label and _val and _val.lower() != "nan":
                         camp_meta["campaign"] = _val
+                # Fallback: read from first data row (standard CM360 export format)
+                if not camp_meta["advertiser"] and len(df) > 0:
+                    _fr = df.iloc[0].fillna("").astype(str).tolist()
+                    # Col C (index 2 in raw = index 2 in df if header absorbed cols) — try header-mapped columns
+                    _adv_ci = next((ci for ci, h in enumerate(raw.iloc[header_row_idx].fillna("").astype(str).tolist())
+                                    if "advertiser name" in h.lower()), None)
+                    _cmp_ci = next((ci for ci, h in enumerate(raw.iloc[header_row_idx].fillna("").astype(str).tolist())
+                                    if "campaign name" in h.lower()), None)
+                    if _adv_ci is not None and _adv_ci < len(_fr):
+                        _v = _fr[_adv_ci].strip()
+                        if _v and _v.lower() not in ("nan", "none", "advertiser name"):
+                            camp_meta["advertiser"] = _v
+                    if _cmp_ci is not None and _cmp_ci < len(_fr):
+                        _v = _fr[_cmp_ci].strip()
+                        if _v and _v.lower() not in ("nan", "none", "campaign name"):
+                            camp_meta["campaign"] = _v
 
                 df = pd.read_excel(
                     io.BytesIO(file_bytes),
@@ -1502,8 +1519,9 @@ with tab4:
                 auto_f = _find_col(["placement id"],                  5)
                 auto_i = _find_col(["placement name"],                8)
                 auto_k = _find_col(["dimensions"],                    10)
-                auto_r = _find_col(["impression tag (image)"],        17)
-                auto_v = _find_col(["click tag"],                     21)
+                auto_r = _find_col(["standard tag", "iframes/javascript tag",
+                                    "impression tag (image)", "javascript tag"], 13)
+                auto_v = _find_col(["click tag", "click through url", "click url"], n_cols - 1)
 
                 # ── Campaign info strip ───────────────────────────────────────
                 if camp_meta["advertiser"] or camp_meta["campaign"]:
@@ -1519,12 +1537,15 @@ with tab4:
                     f"Header auto-detected at row {header_row_idx + 1}"
                 )
                 det_names = {
-                    "F · Placement ID":      str(df.columns[auto_f]),
-                    "I · Name":              str(df.columns[auto_i]),
-                    "K · Dimensions":        str(df.columns[auto_k]),
-                    "R · Impression tag":    str(df.columns[auto_r]),
-                    "V · Click tag":         str(df.columns[auto_v]),
+                    "Placement ID":  str(df.columns[auto_f]),
+                    "Name":          str(df.columns[auto_i]),
+                    "Dimensions":    str(df.columns[auto_k]),
+                    "Tag":           str(df.columns[auto_r]),
                 }
+                if auto_v < n_cols - 1:
+                    det_names["Click URL col"] = str(df.columns[auto_v])
+                else:
+                    det_names["Click URL"] = "extracted from tag"
                 st.markdown(
                     "  ·  ".join(f"**{role}** → *{name}*" for role, name in det_names.items())
                 )
@@ -1537,13 +1558,13 @@ with tab4:
 
                 # ── Column override (only needed if auto-detection was wrong) ─
                 with st.expander("📐 Override column positions", expanded=False):
-                    st.caption("Numbers are 1-based (A=1, B=2 …). Pre-filled with auto-detected values.")
+                    st.caption("Numbers are 1-based (A=1, B=2 …). Pre-filled with auto-detected values. Click URL is normally extracted from inside the tag — only set the Click URL col if your sheet has a dedicated click URL column.")
                     ca, cb, cc, cd, ce = st.columns(5)
-                    col_f = ca.number_input("F · Placement ID",   min_value=1, max_value=n_cols, value=auto_f + 1, step=1, key="xl_col_f")
-                    col_i = cb.number_input("I · Name",           min_value=1, max_value=n_cols, value=auto_i + 1, step=1, key="xl_col_i")
-                    col_k = cc.number_input("K · Dimensions",     min_value=1, max_value=n_cols, value=auto_k + 1, step=1, key="xl_col_k")
-                    col_r = cd.number_input("R · Impression tag", min_value=1, max_value=n_cols, value=auto_r + 1, step=1, key="xl_col_r")
-                    col_v = ce.number_input("V · Click tag",      min_value=1, max_value=n_cols, value=auto_v + 1, step=1, key="xl_col_v")
+                    col_f = ca.number_input("Placement ID",   min_value=1, max_value=n_cols, value=auto_f + 1, step=1, key="xl_col_f")
+                    col_i = cb.number_input("Name",           min_value=1, max_value=n_cols, value=auto_i + 1, step=1, key="xl_col_i")
+                    col_k = cc.number_input("Dimensions",     min_value=1, max_value=n_cols, value=auto_k + 1, step=1, key="xl_col_k")
+                    col_r = cd.number_input("Tag",            min_value=1, max_value=n_cols, value=auto_r + 1, step=1, key="xl_col_r")
+                    col_v = ce.number_input("Click URL col (opt.)", min_value=1, max_value=n_cols, value=min(auto_v + 1, n_cols), step=1, key="xl_col_v")
 
                 idx_f = int(col_f) - 1
                 idx_i = int(col_i) - 1
