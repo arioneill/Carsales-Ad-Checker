@@ -82,8 +82,15 @@ st.markdown("""
 footer, #MainMenu { display: none !important; }
 [data-testid="stSidebar"] { display: none !important; }
 
-/* Global */
-html, body { background: #F5F5F5 !important; }
+/* Global — target all Streamlit app containers for background */
+html, body,
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+[data-testid="stMainBlockContainer"],
+section[data-testid="stSidebar"] ~ div {
+    background: #F5F5F5 !important;
+}
 *, *::before, *::after { font-family: 'Manrope', sans-serif !important; box-sizing: border-box; }
 .mono, .mono * { font-family: 'IBM Plex Mono', monospace !important; }
 
@@ -175,20 +182,33 @@ p, span, label, div { color: #3A3A3A; }
     font-family: 'Manrope', sans-serif !important;
 }
 
-/* File uploader: hide the label row above the dropzone */
-[data-testid="stFileUploader"] .stWidgetLabel { display: none !important; }
+/* File uploader: hide label above dropzone — cover all Streamlit label selectors */
+[data-testid="stFileUploader"] .stWidgetLabel,
+[data-testid="stFileUploader"] [data-testid="stWidgetLabel"],
+[data-testid="stFileUploader"] label,
+[data-testid="stFileUploader"] > div > label,
+[data-testid="stFileUploader"] > div:first-child p {
+    display: none !important;
+    height: 0 !important;
+    overflow: hidden !important;
+}
 
-/* Left panel cards — cover both data-testid and class selectors */
+/* Left panel white cards */
 [data-testid="stVerticalBlockBorderWrapper"],
-.stVerticalBlockBorderWrapper {
+.stVerticalBlockBorderWrapper,
+div[style*="border: 1px solid rgba(49, 51, 63"] {
     background: #ffffff !important;
     border-color: #DBE3EA !important;
     border-radius: 10px !important;
     margin-bottom: 12px !important;
 }
-[data-testid="stVerticalBlockBorderWrapper"] > div,
-.stVerticalBlockBorderWrapper > div {
-    background: transparent !important;
+
+/* Left column itself — fallback white card if above selectors miss */
+[data-testid="column"]:first-child > div {
+    background: #ffffff;
+    border: 1px solid #DBE3EA;
+    border-radius: 10px;
+    overflow: hidden;
 }
 </style>
 """, unsafe_allow_html=True)
