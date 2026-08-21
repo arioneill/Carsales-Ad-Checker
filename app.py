@@ -174,6 +174,15 @@ p, span, label, div { color: #3A3A3A; }
     border-color: #DBE3EA !important;
     font-family: 'Manrope', sans-serif !important;
 }
+
+/* Hide file uploader label text (shown separately from the dropzone) */
+[data-testid="stFileUploader"] > label,
+[data-testid="stFileUploader"] > div > label {
+    display: none !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -353,55 +362,123 @@ left_col, right_col = st.columns([1, 3], gap="large")
 
 # ── LEFT PANEL ─────────────────────────────────────────────────────────────────
 with left_col:
-    st.markdown(_section_label("Ad products"), unsafe_allow_html=True)
-
     sel: list[str] = st.session_state.sel_products
-    for prod in _SELECTOR_PRODUCTS:
-        if prod not in FORMAT_GROUPS:
-            continue
-        count = len(FORMAT_GROUPS[prod])
-        new_val = st.checkbox(
-            f"{prod}  ·  {count}",
-            value=prod in sel,
-            key=f"chk_{prod}",
+    total_assets = sum(len(FORMAT_GROUPS[p]) for p in sel if p in FORMAT_GROUPS)
+
+    # ── Card 1: Ad products ────────────────────────────────────────────────────
+    with st.container(border=True):
+        st.markdown(
+            f'<div style="display:flex;align-items:center;justify-content:space-between;'
+            f'margin-bottom:12px;">'
+            f'<p style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
+            f'text-transform:uppercase;color:{_ROYAL};margin:0;">Ad products</p>'
+            f'</div>',
+            unsafe_allow_html=True,
         )
-        if new_val and prod not in sel:
-            sel.append(prod)
-        elif not new_val and prod in sel:
-            sel.remove(prod)
 
-    st.markdown(_hairline(), unsafe_allow_html=True)
-    st.markdown(_section_label("Required assets"), unsafe_allow_html=True)
-
-    if not sel:
-        st.caption("Select a product above.")
-    else:
-        for prod in sel:
+        for prod in _SELECTOR_PRODUCTS:
             if prod not in FORMAT_GROUPS:
                 continue
+            count = len(FORMAT_GROUPS[prod])
+            new_val = st.checkbox(
+                f"{prod}",
+                value=prod in sel,
+                key=f"chk_{prod}",
+            )
+            if new_val and prod not in sel:
+                sel.append(prod)
+            elif not new_val and prod in sel:
+                sel.remove(prod)
+
+        st.markdown(
+            f'<div style="display:flex;justify-content:space-between;'
+            f'border-top:1px solid {_HAIR};margin-top:10px;padding-top:10px;">'
+            f'<span style="font-size:11px;color:{_GRAY};">'
+            f'{len(sel)} product{"s" if len(sel)!=1 else ""} selected</span>'
+            f'<span style="font-size:11px;font-weight:700;color:{_ROYAL};">'
+            f'{total_assets} assets</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Card 2: Required assets ────────────────────────────────────────────────
+    if sel:
+        with st.container(border=True):
             st.markdown(
-                f'<p style="font-size:11px;font-weight:700;color:{_ROYAL};'
-                f'margin:10px 0 4px;">{prod}</p>',
+                f'<p style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
+                f'text-transform:uppercase;color:{_ROYAL};margin:0 0 12px;">Required assets</p>',
                 unsafe_allow_html=True,
             )
-            for sk in FORMAT_GROUPS[prod]:
-                s = FORMATS[sk]
-                dim = _dim_str(s)
-                short = s["name"].split("—")[-1].strip() if "—" in s["name"] else s["name"]
+
+            # Collect union of formats + specs for the summary footer
+            all_fmts: set[str] = set()
+            all_max_kb: list[int] = []
+            all_anim_s: list[int] = []
+            all_fps: list[int] = []
+
+            for prod in sel:
+                if prod not in FORMAT_GROUPS:
+                    continue
                 st.markdown(
-                    f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;">'
-                    f'<div style="width:7px;height:7px;border-radius:50%;background:{_RED};'
-                    f'flex-shrink:0;"></div>'
-                    f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;'
-                    f'color:{_GRAY};flex-shrink:0;">{dim}</span>'
-                    f'<span style="font-size:11px;color:{_JET};white-space:nowrap;'
-                    f'overflow:hidden;text-overflow:ellipsis;">{short}</span>'
-                    f'</div>',
+                    f'<p style="font-size:11px;font-weight:700;color:{_ROYAL};'
+                    f'margin:8px 0 4px;">{prod}</p>',
                     unsafe_allow_html=True,
                 )
+                for sk in FORMAT_GROUPS[prod]:
+                    s = FORMATS[sk]
+                    dim = _dim_str(s)
+                    short = s["name"].split("—")[-1].strip() if "—" in s["name"] else s["name"]
+                    # Collect for summary
+                    all_fmts.update(s.get("allowed_formats", []))
+                    if s.get("max_file_size_kb"):
+                        all_max_kb.append(s["max_file_size_kb"])
+                    if s.get("max_animation_s"):
+                        all_anim_s.append(s["max_animation_s"])
+                    if s.get("max_frame_rate"):
+                        all_fps.append(s["max_frame_rate"])
+                    # Dot colour: green if first of a product, red otherwise
+                    dot_color = _MINT if sk == FORMAT_GROUPS[prod][0] else _RED
+                    st.markdown(
+                        f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;">'
+                        f'<div style="width:8px;height:8px;border-radius:50%;'
+                        f'background:{dot_color};flex-shrink:0;"></div>'
+                        f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;'
+                        f'color:{_GRAY};flex-shrink:0;min-width:52px;">{dim}</span>'
+                        f'<span style="font-size:11px;color:{_JET};">{short}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            # Spec summary footer
+            fmt_str  = ", ".join(sorted(all_fmts)) if all_fmts else "—"
+            size_str = f"{max(all_max_kb)} KB" if all_max_kb else "No limit"
+            anim_parts = []
+            if all_anim_s:
+                anim_parts.append(f"{max(all_anim_s)}s")
+            if all_fps:
+                anim_parts.append(f"{max(all_fps)}fps")
+            anim_str = " · ".join(anim_parts) if anim_parts else "Static only"
+
+            st.markdown(
+                f'<div style="border-top:1px solid {_HAIR};margin-top:12px;padding-top:10px;">'
+                f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
+                f'<span style="font-size:11px;color:{_GRAY};">Formats</span>'
+                f'<span style="font-size:11px;font-weight:600;color:{_JET};">{fmt_str}</span>'
+                f'</div>'
+                f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
+                f'<span style="font-size:11px;color:{_GRAY};">Max file size</span>'
+                f'<span style="font-size:11px;font-weight:600;color:{_JET};">{size_str}</span>'
+                f'</div>'
+                f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
+                f'<span style="font-size:11px;color:{_GRAY};">Animation</span>'
+                f'<span style="font-size:11px;font-weight:600;color:{_JET};">{anim_str}</span>'
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
     st.markdown(
-        f'<p style="font-size:10px;color:{_GRAY};margin-top:16px;">v{APP_VERSION}</p>',
+        f'<p style="font-size:10px;color:{_GRAY};margin-top:8px;">v{APP_VERSION}</p>',
         unsafe_allow_html=True,
     )
 
@@ -435,6 +512,14 @@ with right_col:
         type=["jpg", "jpeg", "png", "gif", "mp4", "mov", "flv", "webm", "zip"],
         accept_multiple_files=True,
         key="main_upload",
+        label_visibility="collapsed",
+    )
+
+    st.markdown(
+        f'<p style="text-align:center;font-size:12px;color:{_GRAY};margin:8px 0 0;">'
+        f'Dimensions &nbsp;·&nbsp; File format &nbsp;·&nbsp; File size '
+        f'&nbsp;·&nbsp; Animation &amp; loops &nbsp;·&nbsp; 1px border</p>',
+        unsafe_allow_html=True,
     )
 
     # ── Empty state ────────────────────────────────────────────────────────────
