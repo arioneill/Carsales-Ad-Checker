@@ -192,27 +192,43 @@ p, span, label, div { color: #3A3A3A; }
     font-size: 0.82rem !important;
 }
 
-/* Button: relabel "Upload" to "Browse files" and paint it dodger blue */
+/* Once files are attached Streamlit swaps the instructions out for a chip list
+   inside the same section, so drop the big glyph and tighten the padding. */
+[data-testid="stFileUploaderDropzone"]:has([data-testid="stFileChips"]) {
+    padding: 20px !important;
+}
+[data-testid="stFileUploaderDropzone"]:has([data-testid="stFileChips"])::before {
+    display: none;
+}
+
+/* Browse button: relabel and paint it dodger blue.
+   Scope by position, not by button kind. Once files are attached the chip row
+   adds "Remove <file>" and "Add files" buttons inside the same section, and
+   Streamlit reuses the same kind names for them — a kind-based selector paints
+   the remove button blue and labels it "Browse files", turning a destructive
+   control into a decoy. Only the empty state puts a button in section > span. */
 [data-testid="stFileUploaderDropzone"] > span {
     order: 3;
     margin-top: 22px;
 }
-[data-testid="stFileUploaderDropzone"] button {
+[data-testid="stFileUploaderDropzone"] > span > button {
     background: #1E90FF !important;
     border: 1px solid #1E90FF !important;
     border-radius: 8px !important;
     padding: 10px 22px !important;
 }
-[data-testid="stFileUploaderDropzone"] button [data-testid="stMarkdownContainer"] {
+[data-testid="stFileUploaderDropzone"] > span > button [data-testid="stMarkdownContainer"],
+[data-testid="stFileUploaderDropzone"] > span > button [data-testid="stIconMaterial"] {
     display: none !important;
 }
-[data-testid="stFileUploaderDropzone"] button::after {
+[data-testid="stFileUploaderDropzone"] > span > button::after {
     content: "Browse files";
     color: #ffffff;
     font-size: 0.9rem;
     font-weight: 600;
+    white-space: nowrap;
 }
-[data-testid="stFileUploaderDropzone"] button:hover {
+[data-testid="stFileUploaderDropzone"] > span > button:hover {
     background: #0073E3 !important;
     border-color: #0073E3 !important;
 }
@@ -248,11 +264,18 @@ p, span, label, div { color: #3A3A3A; }
     font-family: 'Manrope', sans-serif !important;
 }
 
-/* File uploader: hide the widget label and the ligature icon that renders as
-   literal "upload" text next to the button label. */
+/* Material icons are ligature glyphs: forcing Manrope onto them makes each one
+   print its own name ("upload", "keyboard_arrow_down") over the adjacent label.
+   Restore the icon font so expander arrows and chip delete buttons draw. */
+[data-testid="stIconMaterial"] {
+    font-family: 'Material Symbols Rounded' !important;
+    font-weight: normal !important;
+    letter-spacing: normal !important;
+    text-transform: none !important;
+}
+
 [data-testid="stFileUploader"] .stWidgetLabel,
-[data-testid="stFileUploader"] [data-testid="stWidgetLabel"],
-[data-testid="stFileUploader"] [data-testid="stIconMaterial"] {
+[data-testid="stFileUploader"] [data-testid="stWidgetLabel"] {
     display: none !important;
 }
 
