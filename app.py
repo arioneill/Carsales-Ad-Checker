@@ -407,130 +407,130 @@ def _build_feedback(items: list[dict], campaign: str = "") -> str:
     return "\n".join(L)
 
 
+# ── Query-param state for product selection ────────────────────────────────────
+_qp_raw = st.query_params.get("sel", "")
+if _qp_raw:
+    _qp_sel = [p for p in _qp_raw.split(",") if p in FORMAT_GROUPS]
+    if _qp_sel != st.session_state.sel_products:
+        st.session_state.sel_products = _qp_sel
+
 # ══════════════════════════════════════════════════════════════════════════════
 # LAYOUT
 # ══════════════════════════════════════════════════════════════════════════════
 left_col, right_col = st.columns([1, 3], gap="large")
 
-# ── LEFT PANEL ─────────────────────────────────────────────────────────────────
+# ── LEFT PANEL — rendered as direct HTML so white bg is guaranteed ─────────────
 with left_col:
     sel: list[str] = st.session_state.sel_products
     total_assets = sum(len(FORMAT_GROUPS[p]) for p in sel if p in FORMAT_GROUPS)
 
-    # ── Card 1: Ad products ────────────────────────────────────────────────────
-    with st.container(border=True):
-        st.markdown(
-            f'<div style="display:flex;align-items:center;justify-content:space-between;'
-            f'margin-bottom:12px;">'
-            f'<p style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
-            f'text-transform:uppercase;color:{_ROYAL};margin:0;">Ad products</p>'
-            f'</div>',
-            unsafe_allow_html=True,
+    # Build checkbox rows HTML
+    chk_rows = ""
+    for prod in _SELECTOR_PRODUCTS:
+        if prod not in FORMAT_GROUPS:
+            continue
+        count   = len(FORMAT_GROUPS[prod])
+        checked = "checked" if prod in sel else ""
+        bg      = f"background:#EBF3FF;" if prod in sel else ""
+        chk_rows += (
+            f'<label style="display:flex;align-items:center;justify-content:space-between;'
+            f'padding:7px 10px;border-radius:6px;cursor:pointer;{bg}">'
+            f'<span style="display:flex;align-items:center;gap:8px;">'
+            f'<input type="checkbox" value="{prod}" {checked} '
+            f'onchange="toggleProd(this)" '
+            f'style="accent-color:#1E90FF;width:15px;height:15px;cursor:pointer;">'
+            f'<span style="font-size:13px;font-weight:500;color:#3A3A3A;">{prod}</span>'
+            f'</span>'
+            f'<span style="font-size:11px;font-weight:700;color:#757575;">{count}</span>'
+            f'</label>'
         )
 
-        for prod in _SELECTOR_PRODUCTS:
-            if prod not in FORMAT_GROUPS:
-                continue
-            count = len(FORMAT_GROUPS[prod])
-            new_val = st.checkbox(
-                f"{prod}",
-                value=prod in sel,
-                key=f"chk_{prod}",
-            )
-            if new_val and prod not in sel:
-                sel.append(prod)
-            elif not new_val and prod in sel:
-                sel.remove(prod)
+    # Build required assets HTML
+    assets_html = ""
+    all_fmts: set[str] = set()
+    all_max_kb: list[int] = []
+    all_anim_s: list[int] = []
+    all_fps:    list[int] = []
 
-        st.markdown(
-            f'<div style="display:flex;justify-content:space-between;'
-            f'border-top:1px solid {_HAIR};margin-top:10px;padding-top:10px;">'
-            f'<span style="font-size:11px;color:{_GRAY};">'
-            f'{len(sel)} product{"s" if len(sel)!=1 else ""} selected</span>'
-            f'<span style="font-size:11px;font-weight:700;color:{_ROYAL};">'
-            f'{total_assets} assets</span>'
-            f'</div>',
-            unsafe_allow_html=True,
+    for prod in sel:
+        if prod not in FORMAT_GROUPS:
+            continue
+        assets_html += (
+            f'<p style="font-size:11px;font-weight:700;color:{_ROYAL};margin:10px 0 4px;">'
+            f'{prod}</p>'
         )
-
-    # ── Card 2: Required assets ────────────────────────────────────────────────
-    if sel:
-        with st.container(border=True):
-            st.markdown(
-                f'<p style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
-                f'text-transform:uppercase;color:{_ROYAL};margin:0 0 12px;">Required assets</p>',
-                unsafe_allow_html=True,
+        for i, sk in enumerate(FORMAT_GROUPS[prod]):
+            s     = FORMATS[sk]
+            dim   = _dim_str(s)
+            short = s["name"].split("—")[-1].strip() if "—" in s["name"] else s["name"]
+            dot   = _MINT if i == 0 else _RED
+            all_fmts.update(s.get("allowed_formats", []))
+            if s.get("max_file_size_kb"):  all_max_kb.append(s["max_file_size_kb"])
+            if s.get("max_animation_s"):   all_anim_s.append(s["max_animation_s"])
+            if s.get("max_frame_rate"):    all_fps.append(s["max_frame_rate"])
+            assets_html += (
+                f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;">'
+                f'<div style="width:8px;height:8px;border-radius:50%;background:{dot};'
+                f'flex-shrink:0;"></div>'
+                f'<span style="font-family:IBM Plex Mono,monospace;font-size:11px;'
+                f'color:{_GRAY};flex-shrink:0;min-width:52px;">{dim}</span>'
+                f'<span style="font-size:11px;color:{_JET};">{short}</span>'
+                f'</div>'
             )
 
-            # Collect union of formats + specs for the summary footer
-            all_fmts: set[str] = set()
-            all_max_kb: list[int] = []
-            all_anim_s: list[int] = []
-            all_fps: list[int] = []
+    fmt_str  = ", ".join(sorted(all_fmts)) if all_fmts else "—"
+    size_str = f"{max(all_max_kb)} KB" if all_max_kb else "No limit"
+    anim_parts = []
+    if all_anim_s: anim_parts.append(f"{max(all_anim_s)}s")
+    if all_fps:    anim_parts.append(f"{max(all_fps)}fps")
+    anim_str = " · ".join(anim_parts) if anim_parts else "Static only"
 
-            for prod in sel:
-                if prod not in FORMAT_GROUPS:
-                    continue
-                st.markdown(
-                    f'<p style="font-size:11px;font-weight:700;color:{_ROYAL};'
-                    f'margin:8px 0 4px;">{prod}</p>',
-                    unsafe_allow_html=True,
-                )
-                for sk in FORMAT_GROUPS[prod]:
-                    s = FORMATS[sk]
-                    dim = _dim_str(s)
-                    short = s["name"].split("—")[-1].strip() if "—" in s["name"] else s["name"]
-                    # Collect for summary
-                    all_fmts.update(s.get("allowed_formats", []))
-                    if s.get("max_file_size_kb"):
-                        all_max_kb.append(s["max_file_size_kb"])
-                    if s.get("max_animation_s"):
-                        all_anim_s.append(s["max_animation_s"])
-                    if s.get("max_frame_rate"):
-                        all_fps.append(s["max_frame_rate"])
-                    # Dot colour: green if first of a product, red otherwise
-                    dot_color = _MINT if sk == FORMAT_GROUPS[prod][0] else _RED
-                    st.markdown(
-                        f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;">'
-                        f'<div style="width:8px;height:8px;border-radius:50%;'
-                        f'background:{dot_color};flex-shrink:0;"></div>'
-                        f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;'
-                        f'color:{_GRAY};flex-shrink:0;min-width:52px;">{dim}</span>'
-                        f'<span style="font-size:11px;color:{_JET};">{short}</span>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
+    assets_card = (
+        f'<div style="background:#fff;border:1px solid {_BORDER};border-radius:10px;'
+        f'padding:16px 20px;margin-top:12px;">'
+        f'<p style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
+        f'text-transform:uppercase;color:{_ROYAL};margin:0 0 8px;">Required assets</p>'
+        + (assets_html if sel else
+           '<p style="font-size:12px;color:#757575;">Select a product above.</p>')
+        + (f'<div style="border-top:1px solid {_HAIR};margin-top:12px;padding-top:10px;">'
+           f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
+           f'<span style="font-size:11px;color:{_GRAY};">Formats</span>'
+           f'<span style="font-size:11px;font-weight:600;color:{_JET};">{fmt_str}</span></div>'
+           f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
+           f'<span style="font-size:11px;color:{_GRAY};">Max file size</span>'
+           f'<span style="font-size:11px;font-weight:600;color:{_JET};">{size_str}</span></div>'
+           f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
+           f'<span style="font-size:11px;color:{_GRAY};">Animation</span>'
+           f'<span style="font-size:11px;font-weight:600;color:{_JET};">{anim_str}</span></div>'
+           f'</div>' if sel else "")
+        + f'</div>'
+    )
 
-            # Spec summary footer
-            fmt_str  = ", ".join(sorted(all_fmts)) if all_fmts else "—"
-            size_str = f"{max(all_max_kb)} KB" if all_max_kb else "No limit"
-            anim_parts = []
-            if all_anim_s:
-                anim_parts.append(f"{max(all_anim_s)}s")
-            if all_fps:
-                anim_parts.append(f"{max(all_fps)}fps")
-            anim_str = " · ".join(anim_parts) if anim_parts else "Static only"
-
-            st.markdown(
-                f'<div style="border-top:1px solid {_HAIR};margin-top:12px;padding-top:10px;">'
-                f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
-                f'<span style="font-size:11px;color:{_GRAY};">Formats</span>'
-                f'<span style="font-size:11px;font-weight:600;color:{_JET};">{fmt_str}</span>'
-                f'</div>'
-                f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
-                f'<span style="font-size:11px;color:{_GRAY};">Max file size</span>'
-                f'<span style="font-size:11px;font-weight:600;color:{_JET};">{size_str}</span>'
-                f'</div>'
-                f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
-                f'<span style="font-size:11px;color:{_GRAY};">Animation</span>'
-                f'<span style="font-size:11px;font-weight:600;color:{_JET};">{anim_str}</span>'
-                f'</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-
+    sel_str = ",".join(sel)
     st.markdown(
-        f'<p style="font-size:10px;color:{_GRAY};margin-top:8px;">v{APP_VERSION}</p>',
+        f'<div style="background:#fff;border:1px solid {_BORDER};border-radius:10px;'
+        f'padding:16px 20px;">'
+        f'<p style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
+        f'text-transform:uppercase;color:{_ROYAL};margin:0 0 10px;">Ad products</p>'
+        + chk_rows
+        + f'<div style="display:flex;justify-content:space-between;'
+          f'border-top:1px solid {_HAIR};margin-top:10px;padding-top:10px;">'
+          f'<span style="font-size:11px;color:{_GRAY};">'
+          f'{len(sel)} product{"s" if len(sel)!=1 else ""} selected</span>'
+          f'<span style="font-size:11px;font-weight:700;color:{_ROYAL};">'
+          f'{total_assets} assets</span></div>'
+        + f'</div>'
+        + assets_card
+        + f'<p style="font-size:10px;color:{_GRAY};margin-top:8px;">v{APP_VERSION}</p>'
+        + f'<script>'
+          f'function toggleProd(cb){{'
+          f'  var boxes=document.querySelectorAll("input[type=checkbox]");'
+          f'  var vals=Array.from(boxes).filter(b=>b.checked).map(b=>b.value);'
+          f'  var p=new URLSearchParams(window.parent.location.search);'
+          f'  p.set("sel",vals.join(","));'
+          f'  window.parent.location.search=p.toString();'
+          f'}}'
+          f'</script>',
         unsafe_allow_html=True,
     )
 
