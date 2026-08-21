@@ -177,6 +177,19 @@ p, span, label, div { color: #3A3A3A; }
 
 /* File uploader: hide the label row above the dropzone */
 [data-testid="stFileUploader"] .stWidgetLabel { display: none !important; }
+
+/* Left panel cards — cover both data-testid and class selectors */
+[data-testid="stVerticalBlockBorderWrapper"],
+.stVerticalBlockBorderWrapper {
+    background: #ffffff !important;
+    border-color: #DBE3EA !important;
+    border-radius: 10px !important;
+    margin-bottom: 12px !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] > div,
+.stVerticalBlockBorderWrapper > div {
+    background: transparent !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -207,28 +220,27 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Inject card styling via JS (reliable cross-version) ───────────────────────
+# ── Inject card styling via JS with MutationObserver ──────────────────────────
 components.html("""
 <script>
-(function injectCardStyles() {
-  var css = [
-    '[data-testid="stVerticalBlockBorderWrapper"] {',
-    '  background: #ffffff !important;',
-    '  border: 1px solid #DBE3EA !important;',
-    '  border-radius: 10px !important;',
-    '  margin-bottom: 12px !important;',
-    '}',
-    '[data-testid="stVerticalBlockBorderWrapper"] > div {',
-    '  background: transparent !important;',
-    '}'
-  ].join('');
-  var s = parent.document.getElementById('card-style-inject');
-  if (!s) {
-    s = parent.document.createElement('style');
-    s.id = 'card-style-inject';
-    parent.document.head.appendChild(s);
+(function() {
+  function styleCards() {
+    // Match by data-testid OR class (version-safe)
+    var sel = [
+      '[data-testid="stVerticalBlockBorderWrapper"]',
+      '.stVerticalBlockBorderWrapper'
+    ].join(',');
+    var els = parent.document.querySelectorAll(sel);
+    els.forEach(function(el) {
+      el.style.backgroundColor = '#ffffff';
+      el.style.borderColor     = '#DBE3EA';
+      el.style.borderRadius    = '10px';
+      el.style.marginBottom    = '12px';
+    });
   }
-  s.innerHTML = css;
+  styleCards();
+  var obs = new MutationObserver(styleCards);
+  obs.observe(parent.document.body, {childList: true, subtree: true});
 })();
 </script>
 """, height=0)
