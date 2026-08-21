@@ -145,6 +145,31 @@ p, span, label, div { color: #3A3A3A; }
     ) !important;
     padding: 40px 32px !important;
 }
+/* Upload icon — mint rounded square */
+[data-testid="stFileUploaderDropzoneInstructions"] svg,
+[data-testid="stFileUploaderDropzone"] svg {
+    background: #00BD9D !important;
+    color: #ffffff !important;
+    fill: #ffffff !important;
+    border-radius: 12px !important;
+    padding: 10px !important;
+    width: 48px !important;
+    height: 48px !important;
+}
+
+/* Browse files button — mint */
+[data-testid="stFileUploaderDropzone"] button {
+    background: #00BD9D !important;
+    border-color: #00BD9D !important;
+    color: #ffffff !important;
+    font-weight: 600 !important;
+    border-radius: 6px !important;
+}
+[data-testid="stFileUploaderDropzone"] button:hover {
+    background: #00A387 !important;
+    border-color: #00A387 !important;
+}
+
 [data-testid="stFileUploaderDropzoneInstructions"] span {
     color: #01295F !important;
     font-weight: 600 !important;
