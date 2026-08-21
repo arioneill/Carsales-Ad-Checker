@@ -175,12 +175,30 @@ p, span, label, div { color: #3A3A3A; }
     font-family: 'Manrope', sans-serif !important;
 }
 
-/* Hide file uploader label text (shown separately from the dropzone) */
+/* Hide file uploader label — targets the widget label wrapper Streamlit renders */
+[data-testid="stFileUploader"] .stWidgetLabel,
+[data-testid="stFileUploader"] .stWidgetLabel ~ div:not([data-testid]),
 [data-testid="stFileUploader"] > label,
-[data-testid="stFileUploader"] > div > label {
+[data-testid="stFileUploader"] > div:first-child > label,
+[data-testid="stFileUploader"] > div:first-child > p {
     display: none !important;
     height: 0 !important;
     margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}
+
+/* White bordered cards for left panel containers */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    background: #ffffff !important;
+    border: 1px solid #DBE3EA !important;
+    border-radius: 10px !important;
+    padding: 16px 20px !important;
+    margin-bottom: 12px !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] > div {
+    background: transparent !important;
+    border: none !important;
     padding: 0 !important;
 }
 </style>
