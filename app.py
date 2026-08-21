@@ -145,25 +145,35 @@ p, span, label, div { color: #3A3A3A; }
     ) !important;
     padding: 40px 32px !important;
 }
-/* Upload icon — mint rounded square */
-[data-testid="stFileUploaderDropzoneInstructions"] svg,
-[data-testid="stFileUploaderDropzone"] svg {
-    background: #00BD9D !important;
-    color: #ffffff !important;
-    fill: #ffffff !important;
-    border-radius: 12px !important;
-    padding: 10px !important;
-    width: 48px !important;
-    height: 48px !important;
+/* Mint rounded-square upload glyph at the head of the drop zone */
+[data-testid="stFileUploaderDropzoneInstructions"]::before {
+    content: "\2191";
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    margin-right: 16px;
+    flex-shrink: 0;
+    border-radius: 12px;
+    background: #00BD9D;
+    color: #ffffff;
+    font-size: 22px;
+    font-weight: 700;
 }
 
-/* Browse files button — mint */
-[data-testid="stFileUploaderDropzone"] button {
+/* Browse/Upload button — mint */
+[data-testid="stFileUploaderDropzone"] button,
+[data-testid="stFileUploaderDropzone"] [data-testid="stBaseButton-secondary"] {
     background: #00BD9D !important;
-    border-color: #00BD9D !important;
+    border: 1px solid #00BD9D !important;
+    border-radius: 6px !important;
+    padding: 8px 20px !important;
+}
+[data-testid="stFileUploaderDropzone"] button p,
+[data-testid="stFileUploaderDropzone"] button span {
     color: #ffffff !important;
     font-weight: 600 !important;
-    border-radius: 6px !important;
 }
 [data-testid="stFileUploaderDropzone"] button:hover {
     background: #00A387 !important;
@@ -207,33 +217,34 @@ p, span, label, div { color: #3A3A3A; }
     font-family: 'Manrope', sans-serif !important;
 }
 
-/* File uploader: hide label above dropzone — cover all Streamlit label selectors */
+/* File uploader: hide the widget label and the ligature icon that renders as
+   literal "upload" text next to the button label. */
 [data-testid="stFileUploader"] .stWidgetLabel,
 [data-testid="stFileUploader"] [data-testid="stWidgetLabel"],
-[data-testid="stFileUploader"] label,
-[data-testid="stFileUploader"] > div > label,
-[data-testid="stFileUploader"] > div:first-child p {
+[data-testid="stFileUploader"] [data-testid="stIconMaterial"] {
     display: none !important;
-    height: 0 !important;
-    overflow: hidden !important;
 }
 
-/* Left panel white cards */
-[data-testid="stVerticalBlockBorderWrapper"],
-.stVerticalBlockBorderWrapper,
-div[style*="border: 1px solid rgba(49, 51, 63"] {
-    background: #ffffff !important;
-    border-color: #DBE3EA !important;
-    border-radius: 10px !important;
-    margin-bottom: 12px !important;
+/* Left column: collapse gaps so the HTML cards and checkboxes read as one card */
+[data-testid="column"]:first-child [data-testid="stVerticalBlock"] {
+    gap: 0 !important;
 }
 
-/* Left column itself — fallback white card if above selectors miss */
-[data-testid="column"]:first-child > div {
+/* Product checkboxes sit inside the white Ad-products card */
+[data-testid="column"]:first-child [data-testid="stCheckbox"] {
     background: #ffffff;
-    border: 1px solid #DBE3EA;
-    border-radius: 10px;
-    overflow: hidden;
+    border-left: 1px solid #DBE3EA;
+    border-right: 1px solid #DBE3EA;
+    padding: 3px 20px;
+    margin: 0 !important;
+}
+[data-testid="column"]:first-child [data-testid="stCheckbox"] label {
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    color: #3A3A3A !important;
+}
+[data-testid="column"]:first-child [data-testid="stCheckbox"] label p {
+    font-size: 13px !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -432,45 +443,49 @@ def _build_feedback(items: list[dict], campaign: str = "") -> str:
     return "\n".join(L)
 
 
-# ── Query-param state for product selection ────────────────────────────────────
-_qp_raw = st.query_params.get("sel", "")
-if _qp_raw:
-    _qp_sel = [p for p in _qp_raw.split(",") if p in FORMAT_GROUPS]
-    if _qp_sel != st.session_state.sel_products:
-        st.session_state.sel_products = _qp_sel
-
 # ══════════════════════════════════════════════════════════════════════════════
 # LAYOUT
 # ══════════════════════════════════════════════════════════════════════════════
 left_col, right_col = st.columns([1, 3], gap="large")
 
-# ── LEFT PANEL — rendered as direct HTML so white bg is guaranteed ─────────────
+# ── LEFT PANEL ─────────────────────────────────────────────────────────────────
 with left_col:
     sel: list[str] = st.session_state.sel_products
-    total_assets = sum(len(FORMAT_GROUPS[p]) for p in sel if p in FORMAT_GROUPS)
 
-    # Build checkbox rows HTML
-    chk_rows = ""
+    # ── Ad products card (Streamlit checkboxes for real interactivity) ─────────
+    st.markdown(
+        f'<div style="background:#fff;border:1px solid {_BORDER};border-radius:10px;'
+        f'padding:16px 20px 0 20px;margin-bottom:0;">'
+        f'<p style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
+        f'text-transform:uppercase;color:{_ROYAL};margin:0 0 8px;">Ad products</p>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
     for prod in _SELECTOR_PRODUCTS:
         if prod not in FORMAT_GROUPS:
             continue
         count   = len(FORMAT_GROUPS[prod])
-        checked = "checked" if prod in sel else ""
-        bg      = f"background:#EBF3FF;" if prod in sel else ""
-        chk_rows += (
-            f'<label style="display:flex;align-items:center;justify-content:space-between;'
-            f'padding:7px 10px;border-radius:6px;cursor:pointer;{bg}">'
-            f'<span style="display:flex;align-items:center;gap:8px;">'
-            f'<input type="checkbox" value="{prod}" {checked} '
-            f'onchange="toggleProd(this)" '
-            f'style="accent-color:#1E90FF;width:15px;height:15px;cursor:pointer;">'
-            f'<span style="font-size:13px;font-weight:500;color:#3A3A3A;">{prod}</span>'
-            f'</span>'
-            f'<span style="font-size:11px;font-weight:700;color:#757575;">{count}</span>'
-            f'</label>'
-        )
+        new_val = st.checkbox(f"{prod}  ·  {count}", value=prod in sel, key=f"chk_{prod}")
+        if new_val and prod not in sel:
+            sel.append(prod)
+        elif not new_val and prod in sel:
+            sel.remove(prod)
 
-    # Build required assets HTML
+    total_assets = sum(len(FORMAT_GROUPS[p]) for p in sel if p in FORMAT_GROUPS)
+    st.markdown(
+        f'<div style="background:#fff;border:1px solid {_BORDER};border-radius:0 0 10px 10px;'
+        f'padding:8px 20px 14px;margin-top:-8px;border-top:none;">'
+        f'<div style="display:flex;justify-content:space-between;'
+        f'border-top:1px solid {_HAIR};padding-top:10px;">'
+        f'<span style="font-size:11px;color:{_GRAY};">'
+        f'{len(sel)} product{"s" if len(sel)!=1 else ""} selected</span>'
+        f'<span style="font-size:11px;font-weight:700;color:{_ROYAL};">'
+        f'{total_assets} assets</span></div></div>',
+        unsafe_allow_html=True,
+    )
+
+    # ── Required assets card (pure HTML — inline bg always works) ──────────────
     assets_html = ""
     all_fmts: set[str] = set()
     all_max_kb: list[int] = []
@@ -489,10 +504,11 @@ with left_col:
             dim   = _dim_str(s)
             short = s["name"].split("—")[-1].strip() if "—" in s["name"] else s["name"]
             dot   = _MINT if i == 0 else _RED
-            all_fmts.update(s.get("allowed_formats", []))
-            if s.get("max_file_size_kb"):  all_max_kb.append(s["max_file_size_kb"])
-            if s.get("max_animation_s"):   all_anim_s.append(s["max_animation_s"])
-            if s.get("max_frame_rate"):    all_fps.append(s["max_frame_rate"])
+            all_fmts.update(f.upper() for f in (s.get("accepted_formats") or []))
+            all_fmts.update(f.upper() for f in (s.get("video_formats") or []))
+            if s.get("max_file_size_kb"):      all_max_kb.append(s["max_file_size_kb"])
+            if s.get("animation_max_seconds"): all_anim_s.append(s["animation_max_seconds"])
+            if s.get("max_fps"):               all_fps.append(s["max_fps"])
             assets_html += (
                 f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;">'
                 f'<div style="width:8px;height:8px;border-radius:50%;background:{dot};'
@@ -508,54 +524,31 @@ with left_col:
     anim_parts = []
     if all_anim_s: anim_parts.append(f"{max(all_anim_s)}s")
     if all_fps:    anim_parts.append(f"{max(all_fps)}fps")
-    anim_str = " · ".join(anim_parts) if anim_parts else "Static only"
+    anim_str   = " · ".join(anim_parts) if anim_parts else "Static only"
 
-    assets_card = (
+    footer = (
+        f'<div style="border-top:1px solid {_HAIR};margin-top:12px;padding-top:10px;">'
+        f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
+        f'<span style="font-size:11px;color:{_GRAY};">Formats</span>'
+        f'<span style="font-size:11px;font-weight:600;color:{_JET};">{fmt_str}</span></div>'
+        f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
+        f'<span style="font-size:11px;color:{_GRAY};">Max file size</span>'
+        f'<span style="font-size:11px;font-weight:600;color:{_JET};">{size_str}</span></div>'
+        f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
+        f'<span style="font-size:11px;color:{_GRAY};">Animation</span>'
+        f'<span style="font-size:11px;font-weight:600;color:{_JET};">{anim_str}</span></div>'
+        f'</div>'
+    ) if sel else ""
+
+    st.markdown(
         f'<div style="background:#fff;border:1px solid {_BORDER};border-radius:10px;'
         f'padding:16px 20px;margin-top:12px;">'
         f'<p style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
         f'text-transform:uppercase;color:{_ROYAL};margin:0 0 8px;">Required assets</p>'
-        + (assets_html if sel else
-           '<p style="font-size:12px;color:#757575;">Select a product above.</p>')
-        + (f'<div style="border-top:1px solid {_HAIR};margin-top:12px;padding-top:10px;">'
-           f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
-           f'<span style="font-size:11px;color:{_GRAY};">Formats</span>'
-           f'<span style="font-size:11px;font-weight:600;color:{_JET};">{fmt_str}</span></div>'
-           f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
-           f'<span style="font-size:11px;color:{_GRAY};">Max file size</span>'
-           f'<span style="font-size:11px;font-weight:600;color:{_JET};">{size_str}</span></div>'
-           f'<div style="display:flex;justify-content:space-between;margin:4px 0;">'
-           f'<span style="font-size:11px;color:{_GRAY};">Animation</span>'
-           f'<span style="font-size:11px;font-weight:600;color:{_JET};">{anim_str}</span></div>'
-           f'</div>' if sel else "")
+        + (assets_html + footer if sel else
+           '<p style="font-size:12px;color:#757575;margin:0;">Select a product above.</p>')
         + f'</div>'
-    )
-
-    sel_str = ",".join(sel)
-    st.markdown(
-        f'<div style="background:#fff;border:1px solid {_BORDER};border-radius:10px;'
-        f'padding:16px 20px;">'
-        f'<p style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
-        f'text-transform:uppercase;color:{_ROYAL};margin:0 0 10px;">Ad products</p>'
-        + chk_rows
-        + f'<div style="display:flex;justify-content:space-between;'
-          f'border-top:1px solid {_HAIR};margin-top:10px;padding-top:10px;">'
-          f'<span style="font-size:11px;color:{_GRAY};">'
-          f'{len(sel)} product{"s" if len(sel)!=1 else ""} selected</span>'
-          f'<span style="font-size:11px;font-weight:700;color:{_ROYAL};">'
-          f'{total_assets} assets</span></div>'
-        + f'</div>'
-        + assets_card
-        + f'<p style="font-size:10px;color:{_GRAY};margin-top:8px;">v{APP_VERSION}</p>'
-        + f'<script>'
-          f'function toggleProd(cb){{'
-          f'  var boxes=document.querySelectorAll("input[type=checkbox]");'
-          f'  var vals=Array.from(boxes).filter(b=>b.checked).map(b=>b.value);'
-          f'  var p=new URLSearchParams(window.parent.location.search);'
-          f'  p.set("sel",vals.join(","));'
-          f'  window.parent.location.search=p.toString();'
-          f'}}'
-          f'</script>',
+        + f'<p style="font-size:10px;color:{_GRAY};margin-top:8px;">v{APP_VERSION}</p>',
         unsafe_allow_html=True,
     )
 
