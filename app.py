@@ -1,5 +1,5 @@
 from __future__ import annotations
-import io, os, zipfile, datetime
+import io, os, re, zipfile, datetime
 
 APP_VERSION = "1.6.0"
 
@@ -136,54 +136,85 @@ p, span, label, div { color: #3A3A3A; }
 .stCheckbox { margin-bottom: 2px !important; }
 .stCheckbox > label { font-size: 13px !important; font-weight: 500 !important; }
 
-/* File uploader */
+/* ── Drop zone ────────────────────────────────────────────────────────────────
+   Streamlit's dropzone is a bare row of [button][hint]. Restack it as a centred
+   column: mint glyph, headline, hint, button. Orders are explicit because the
+   ::before pseudo-element is always the first flex child.                     */
 [data-testid="stFileUploaderDropzone"] {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 0 !important;
     border: 2px dashed #9CC7F5 !important;
     border-radius: 10px !important;
     background: repeating-linear-gradient(
         135deg, #F4FAFF 0px, #F4FAFF 8px, #EAF4FF 8px, #EAF4FF 16px
     ) !important;
-    padding: 40px 32px !important;
-}
-/* Mint rounded-square upload glyph at the head of the drop zone */
-[data-testid="stFileUploaderDropzoneInstructions"]::before {
-    content: "\2191";
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 44px;
-    height: 44px;
-    margin-right: 16px;
-    flex-shrink: 0;
-    border-radius: 12px;
-    background: #00BD9D;
-    color: #ffffff;
-    font-size: 22px;
-    font-weight: 700;
+    padding: 56px 32px !important;
 }
 
-/* Browse/Upload button — mint */
-[data-testid="stFileUploaderDropzone"] button,
-[data-testid="stFileUploaderDropzone"] [data-testid="stBaseButton-secondary"] {
-    background: #00BD9D !important;
-    border: 1px solid #00BD9D !important;
-    border-radius: 6px !important;
-    padding: 8px 20px !important;
+/* Mint→blue rounded-square upload glyph. Inline SVG keeps it independent of
+   the Material icon font, which does not always load on Streamlit Cloud. */
+[data-testid="stFileUploaderDropzone"]::before {
+    content: "";
+    order: 1;
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    background:
+        url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'/%3E%3Cpolyline points='17 8 12 3 7 8'/%3E%3Cline x1='12' y1='3' x2='12' y2='15'/%3E%3C/svg%3E")
+        center / 26px 26px no-repeat,
+        linear-gradient(135deg, #00BD9D 0%, #1E90FF 100%);
+    box-shadow: 0 4px 12px rgba(0, 189, 157, 0.28);
 }
-[data-testid="stFileUploaderDropzone"] button p,
-[data-testid="stFileUploaderDropzone"] button span {
-    color: #ffffff !important;
-    font-weight: 600 !important;
+
+[data-testid="stFileUploaderDropzoneInstructions"] {
+    order: 2;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+/* Headline above Streamlit's own size/format hint */
+[data-testid="stFileUploaderDropzoneInstructions"]::before {
+    content: "Drop your creative files here";
+    margin: 20px 0 8px;
+    color: #01295F;
+    font-size: 1.35rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] span {
+    color: #757575 !important;
+    font-weight: 400 !important;
+    font-size: 0.82rem !important;
+}
+
+/* Button: relabel "Upload" to "Browse files" and paint it dodger blue */
+[data-testid="stFileUploaderDropzone"] > span {
+    order: 3;
+    margin-top: 22px;
+}
+[data-testid="stFileUploaderDropzone"] button {
+    background: #1E90FF !important;
+    border: 1px solid #1E90FF !important;
+    border-radius: 8px !important;
+    padding: 10px 22px !important;
+}
+[data-testid="stFileUploaderDropzone"] button [data-testid="stMarkdownContainer"] {
+    display: none !important;
+}
+[data-testid="stFileUploaderDropzone"] button::after {
+    content: "Browse files";
+    color: #ffffff;
+    font-size: 0.9rem;
+    font-weight: 600;
 }
 [data-testid="stFileUploaderDropzone"] button:hover {
-    background: #00A387 !important;
-    border-color: #00A387 !important;
-}
-
-[data-testid="stFileUploaderDropzoneInstructions"] span {
-    color: #01295F !important;
-    font-weight: 600 !important;
-    font-size: 1rem !important;
+    background: #0073E3 !important;
+    border-color: #0073E3 !important;
 }
 
 /* Buttons */
@@ -225,26 +256,57 @@ p, span, label, div { color: #3A3A3A; }
     display: none !important;
 }
 
-/* Left column: collapse gaps so the HTML cards and checkboxes read as one card */
-[data-testid="column"]:first-child [data-testid="stVerticalBlock"] {
+/* ── Left panel ───────────────────────────────────────────────────────────────
+   The Ad-products card is three stacked Streamlit elements (header HTML, the
+   checkbox widgets, footer HTML). Collapse the gaps between them and give each
+   piece only the borders it needs so they read as one continuous card.       */
+/* Collapse the gap in whichever vertical block holds the product checkboxes,
+   so header HTML + rows + footer HTML butt up into one card. */
+[data-testid="stVerticalBlock"]:has(> [class*="st-key-chk_"]) {
     gap: 0 !important;
 }
+[class*="st-key-chk_"] { margin: 0 !important; }
 
-/* Product checkboxes sit inside the white Ad-products card */
-[data-testid="column"]:first-child [data-testid="stCheckbox"] {
+[class*="st-key-chk_"] [data-testid="stCheckbox"] {
     background: #ffffff;
     border-left: 1px solid #DBE3EA;
     border-right: 1px solid #DBE3EA;
-    padding: 3px 20px;
+    padding: 2px 12px;
     margin: 0 !important;
 }
-[data-testid="column"]:first-child [data-testid="stCheckbox"] label {
+[class*="st-key-chk_"] [data-testid="stCheckbox"] > label {
+    display: flex !important;
+    width: 100%;
+    padding: 7px 8px;
+    border-radius: 6px;
+    align-items: center !important;
+}
+/* Selected row gets the blue pill treatment */
+[class*="st-key-chk_"] [data-testid="stCheckbox"]:has(input:checked) > label {
+    background: #EBF3FF;
+}
+/* Right-aligned per-product asset count (text supplied per row, see app.py) */
+[class*="st-key-chk_"] [data-testid="stCheckbox"] > label::after {
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 700;
+    color: #757575;
+}
+/* Let the label text claim the space between the box and the count, otherwise
+   the bolded selected row shrink-wraps and spills onto a second line. */
+[class*="st-key-chk_"] [data-testid="stCheckbox"] label > div {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+[class*="st-key-chk_"] [data-testid="stCheckbox"] label p {
     font-size: 13px !important;
     font-weight: 500 !important;
     color: #3A3A3A !important;
+    line-height: 1.35 !important;
 }
-[data-testid="column"]:first-child [data-testid="stCheckbox"] label p {
-    font-size: 13px !important;
+[class*="st-key-chk_"] [data-testid="stCheckbox"]:has(input:checked) label p {
+    color: #01295F !important;
+    font-weight: 700 !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -452,32 +514,44 @@ left_col, right_col = st.columns([1, 3], gap="large")
 with left_col:
     sel: list[str] = st.session_state.sel_products
 
-    # ── Ad products card (Streamlit checkboxes for real interactivity) ─────────
+    # ── Ad products card ───────────────────────────────────────────────────────
+    # Header, checkbox rows and footer are three separate Streamlit elements, so
+    # each carries only the borders it needs and the CSS collapses the gaps.
     st.markdown(
-        f'<div style="background:#fff;border:1px solid {_BORDER};border-radius:10px;'
-        f'padding:16px 20px 0 20px;margin-bottom:0;">'
+        f'<div style="background:#fff;border:1px solid {_BORDER};border-bottom:none;'
+        f'border-radius:10px 10px 0 0;padding:16px 20px 6px;">'
         f'<p style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
-        f'text-transform:uppercase;color:{_ROYAL};margin:0 0 8px;">Ad products</p>'
+        f'text-transform:uppercase;color:{_ROYAL};margin:0;">Ad products</p>'
         f'</div>',
         unsafe_allow_html=True,
     )
 
+    # Per-row asset counts, right-aligned via the container class Streamlit
+    # derives from each widget key (.st-key-<key>).
+    count_css = ""
     for prod in _SELECTOR_PRODUCTS:
         if prod not in FORMAT_GROUPS:
             continue
+        key     = "chk_" + re.sub(r"[^a-z0-9]+", "_", prod.lower()).strip("_")
         count   = len(FORMAT_GROUPS[prod])
-        new_val = st.checkbox(f"{prod}  ·  {count}", value=prod in sel, key=f"chk_{prod}")
+        count_css += (
+            f'.st-key-{key} [data-testid="stCheckbox"] > label::after'
+            f'{{content:"{count}";}}'
+        )
+        new_val = st.checkbox(prod, value=prod in sel, key=key)
         if new_val and prod not in sel:
             sel.append(prod)
         elif not new_val and prod in sel:
             sel.remove(prod)
 
+    st.markdown(f"<style>{count_css}</style>", unsafe_allow_html=True)
+
     total_assets = sum(len(FORMAT_GROUPS[p]) for p in sel if p in FORMAT_GROUPS)
     st.markdown(
-        f'<div style="background:#fff;border:1px solid {_BORDER};border-radius:0 0 10px 10px;'
-        f'padding:8px 20px 14px;margin-top:-8px;border-top:none;">'
+        f'<div style="background:#fff;border:1px solid {_BORDER};border-top:none;'
+        f'border-radius:0 0 10px 10px;padding:0 20px 14px;">'
         f'<div style="display:flex;justify-content:space-between;'
-        f'border-top:1px solid {_HAIR};padding-top:10px;">'
+        f'border-top:1px solid {_HAIR};padding-top:12px;margin-top:8px;">'
         f'<span style="font-size:11px;color:{_GRAY};">'
         f'{len(sel)} product{"s" if len(sel)!=1 else ""} selected</span>'
         f'<span style="font-size:11px;font-weight:700;color:{_ROYAL};">'
