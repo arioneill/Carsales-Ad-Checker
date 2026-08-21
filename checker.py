@@ -74,6 +74,8 @@ def check_file_format(fmt: str, spec: dict) -> CheckResult:
 def check_file_size(file_bytes: bytes, fmt: str, spec: dict) -> CheckResult:
     size_kb = len(file_bytes) / 1024
     max_kb = spec["max_file_size_kb"]
+    if max_kb is None:
+        return CheckResult(name="File Size", passed=True, message=f"{size_kb:.1f} KB ✓")
     passed = size_kb <= max_kb
     norm = _normalise_format(fmt)
     # GIFs can't be reliably recompressed without remaking them

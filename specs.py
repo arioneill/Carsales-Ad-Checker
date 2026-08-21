@@ -1,5 +1,5 @@
 # All carsales Network ad format specifications
-# Sources: carsales Network Creative Guidelines (Jan 2026), format spec PDFs
+# Sources: carsales Network Creative Guidelines (Jan 2026), On & Off Specs reference doc
 
 def _spec(name, group, dimensions, accepted_formats, max_file_size_kb,
           animation_max_seconds=None, animation_max_plays=None, max_fps=None,
@@ -88,13 +88,12 @@ FORMATS = {
         clear_zone_top_px=280,
     ),
     "card_logo": _spec(
-        "carsales Card — Logo (1:1 square)", "carsales Card",
-        None, ["JPEG", "PNG"], 100,
-        aspect_ratio="1:1", logo_white_bg_required=True,
+        "carsales Card — Logo (100×100)", "carsales Card",
+        (100, 100), ["JPEG", "PNG"], 100,
+        logo_white_bg_required=True,
     ),
 
     # ── BRAND TERMS — STANDARD BANNERS ───────────────────────────────────────
-    # Same animation/border rules as Network Display; includes 970×250 billboard
     "brand_terms_728x90": _spec(
         "Brand Terms — Desktop Leaderboard (728×90)", "Brand Terms",
         (728, 90), ["JPEG", "GIF"], 80,
@@ -125,7 +124,6 @@ FORMATS = {
         (300, 100), ["JPEG", "GIF"], 80,
         animation_max_seconds=15, animation_max_plays=3, max_fps=24, border=True,
     ),
-    # Brand Terms — Native High Impact unique assets
     "brand_terms_skin_mobile": _spec(
         "Brand Terms — Native High Impact Mobile Skin (1940×500)", "Brand Terms",
         (1940, 500), ["JPEG", "PNG"], 100,
@@ -173,7 +171,6 @@ FORMATS = {
         (250, 250), ["PNG"], 80,
         logo_white_bg_required=True,
     ),
-    # Billboard and standard banners share same rules as display but max 30s animation, looping OK
     "auto_unmissable_billboard": _spec(
         "Auto Unmissable High-Impact — Billboard (970×250)", "Auto Unmissable High-Impact",
         (970, 250), ["JPEG", "PNG"], 80,
@@ -230,6 +227,35 @@ FORMATS = {
         aspect_ratio="1:1", logo_white_bg_required=True,
     ),
 
+    # ── SPONSORED SEARCH ─────────────────────────────────────────────────────
+    "sponsored_search_logo": _spec(
+        "Sponsored Search — Logo (1:1 PNG)", "Sponsored Search",
+        None, ["PNG"], 200,
+        aspect_ratio="1:1", logo_white_bg_required=True,
+    ),
+
+    # ── NEWSLETTER ───────────────────────────────────────────────────────────
+    "newsletter_300x250": _spec(
+        "Newsletter — Static Image (300×250)", "Newsletter",
+        (300, 250), ["JPEG", "GIF"], 80,
+    ),
+
+    # ── TILE ─────────────────────────────────────────────────────────────────
+    "tile_211x70": _spec(
+        "Tile — Static Image (211×70)", "Tile",
+        (211, 70), ["JPEG", "GIF"], 80,
+    ),
+
+    # ── PUSH NOTIFICATIONS ───────────────────────────────────────────────────
+    "push_notification_ios": _spec(
+        "Push Notification — iOS (1038×1038)", "Push Notifications",
+        (1038, 1038), ["JPEG", "PNG"], 5120,
+    ),
+    "push_notification_android": _spec(
+        "Push Notification — Android (1024×512)", "Push Notifications",
+        (1024, 512), ["JPEG", "PNG"], 5120,
+    ),
+
     # ── IN FEED VIDEO ─────────────────────────────────────────────────────────
     "in_feed_video_file": _spec(
         "In Feed Video — Video File (MP4)", "In Feed Video",
@@ -258,7 +284,7 @@ FORMATS = {
     ),
     "outstream_end_frame": _spec(
         "Outstream Video — End Frame (16:9, up to 100KB)", "Outstream Video",
-        None, ["JPEG", "PNG"], 100,
+        None, ["JPEG", "GIF"], 100,
         aspect_ratio="16:9",
     ),
 
@@ -275,11 +301,80 @@ FORMATS = {
         (100, 100), ["JPEG", "PNG"], 100,
         logo_white_bg_required=True,
     ),
+
+    # ── XT SOCIAL NEWSFEED ───────────────────────────────────────────────────
+    "xt_social_newsfeed_image": _spec(
+        "XT Social Newsfeed — Image (1080×1080)", "XT Social Newsfeed",
+        (1080, 1080), ["JPEG", "PNG"], None,
+    ),
+
+    # ── XT PREMIUM DISPLAY ───────────────────────────────────────────────────
+    "xt_premium_display_970x250": _spec(
+        "XT Premium Display — Billboard (970×250)", "XT Premium Display",
+        (970, 250), ["JPEG", "GIF"], 100,
+    ),
+    "xt_premium_display_300x600": _spec(
+        "XT Premium Display — Half Page (300×600)", "XT Premium Display",
+        (300, 600), ["JPEG", "GIF"], 100,
+    ),
+
+    # ── XT DISPLAY ───────────────────────────────────────────────────────────
+    "xt_display_300x250": _spec(
+        "XT Display — MREC (300×250)", "XT Display",
+        (300, 250), ["JPEG", "GIF"], 100,
+    ),
+    "xt_display_300x600": _spec(
+        "XT Display — Half Page (300×600)", "XT Display",
+        (300, 600), ["JPEG", "GIF"], 100,
+    ),
+    "xt_display_300x100": _spec(
+        "XT Display — Mobile Banner (300×100)", "XT Display",
+        (300, 100), ["JPEG", "GIF"], 100,
+    ),
+    "xt_display_300x50": _spec(
+        "XT Display — Mobile Strip (300×50)", "XT Display",
+        (300, 50), ["JPEG", "GIF"], 100,
+    ),
+    "xt_display_728x90": _spec(
+        "XT Display — Leaderboard (728×90)", "XT Display",
+        (728, 90), ["JPEG", "GIF"], 100,
+    ),
+    "xt_display_160x600": _spec(
+        "XT Display — Wide Skyscraper (160×600)", "XT Display",
+        (160, 600), ["JPEG", "GIF"], 100,
+    ),
+    "xt_display_320x50": _spec(
+        "XT Display — Mobile Leaderboard (320×50)", "XT Display",
+        (320, 50), ["JPEG", "GIF"], 100,
+    ),
+
+    # ── XT PRE-ROLL VIDEO ────────────────────────────────────────────────────
+    "xt_preroll_video": _spec(
+        "XT Pre-Roll Video — 960×540 (16:9)", "XT Pre-Roll Video",
+        None, ["MP4", "FLV", "WEBM"], None,
+        is_video=True, video_formats=["MP4", "FLV", "WEBM"],
+        video_max_size_mb=None,
+        video_min_duration_s=15, video_max_duration_s=30,
+        video_aspect_ratios=["16:9"],
+        video_min_resolution=(960, 540), video_max_resolution=(960, 540),
+    ),
+
+    # ── XT CONNECTED TV ──────────────────────────────────────────────────────
+    "xt_ctv_video": _spec(
+        "XT Connected TV — 1920×1080 (16:9)", "XT Connected TV",
+        None, ["MP4"], None,
+        is_video=True, video_formats=["MP4"],
+        video_max_size_mb=None,
+        video_min_duration_s=15, video_max_duration_s=30,
+        video_aspect_ratios=["16:9"],
+        video_min_resolution=(1920, 1080), video_max_resolution=(1920, 1080),
+    ),
 }
 
 
 # Group order controls dropdown display order
 _GROUP_ORDER = [
+    # On Network
     "Network Display",
     "Roadblock",
     "carsales Card",
@@ -289,10 +384,20 @@ _GROUP_ORDER = [
     "Unmissable",
     "carsales Carousel",
     "carsales Discover",
+    "Sponsored Search",
+    "Newsletter",
+    "Tile",
+    "Push Notifications",
     "In Feed Video",
     "Outstream Video",
     "Guaranteed Consideration",
     "Stock Boost",
+    # Off Network (XT)
+    "XT Social Newsfeed",
+    "XT Premium Display",
+    "XT Display",
+    "XT Pre-Roll Video",
+    "XT Connected TV",
 ]
 
 FORMAT_GROUPS = {
@@ -307,8 +412,6 @@ CARD_TEXT_LIMITS = {
     "Link Description (off-network only)": 35,
 }
 
-# Copy/text field character limits keyed by product group name.
-# All limits include spaces unless noted.
 COPY_LIMITS: dict[str, dict[str, int]] = {
     "carsales Card": {
         "Headline Text": 30,

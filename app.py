@@ -4,7 +4,7 @@ import os
 import zipfile
 import datetime
 
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -304,7 +304,7 @@ st.markdown(
 )
 st.divider()
 
-_VIDEO_EXTS: frozenset[str] = frozenset({".mp4", ".mov"})
+_VIDEO_EXTS: frozenset[str] = frozenset({".mp4", ".mov", ".flv", ".webm"})
 
 
 # ── Cached check helpers ──────────────────────────────────────────────────────
@@ -361,8 +361,8 @@ with tab_mf:
     st.caption("Upload multiple creatives — each file is automatically matched to its spec by dimensions.")
 
     uploaded_files = st.file_uploader(
-        "JPEG, PNG, GIF, MP4 or MOV — select as many files as you like",
-        type=["jpg", "jpeg", "png", "gif", "mp4", "mov"],
+        "JPEG, PNG, GIF, MP4, MOV, FLV or WebM — select as many files as you like",
+        type=["jpg", "jpeg", "png", "gif", "mp4", "mov", "flv", "webm"],
         accept_multiple_files=True,
         key="mf_upload",
     )
@@ -498,7 +498,7 @@ with tab_mf:
                 feedback_ui(all_issues_mf, "mf")
 
         # ── Video files ────────────────────────────────────────────────────────
-        _VIDEO_SPEC_CHOICES = [k for k in ["in_feed_video_file", "outstream_video_file"] if k in FORMATS]
+        _VIDEO_SPEC_CHOICES = [k for k, v in FORMATS.items() if v.get("is_video")]
         if video_data:
             st.divider()
             st.subheader("Video files")
@@ -571,7 +571,7 @@ with tab_zip:
                     basename = os.path.basename(name)
                     if not basename or basename.startswith(".") or basename.startswith("__"):
                         continue
-                    if ext in _VIDEO_EXTS:
+                    if ext in _VIDEO_EXTS:  # .mp4 .mov .flv .webm
                         try:
                             zip_videos.append((basename, zf.read(name)))
                         except Exception:
@@ -694,7 +694,7 @@ with tab_zip:
                         feedback_ui(zip_issues, "zp")
 
             # ── Video files in ZIP ────────────────────────────────────────────
-            _ZIP_VSPEC_CHOICES = [k for k in ["in_feed_video_file", "outstream_video_file"] if k in FORMATS]
+            _ZIP_VSPEC_CHOICES = [k for k, v in FORMATS.items() if v.get("is_video")]
             if zip_videos:
                 st.divider()
                 st.markdown("### Video files in ZIP")
