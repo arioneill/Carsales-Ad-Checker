@@ -302,6 +302,45 @@ def _section_label(text: str) -> str:
 def _hairline() -> str:
     return f'<div style="height:1px;background:{_HAIR};margin:14px 0;"></div>'
 
+def _white_bubble(label: str) -> str:
+    return (f'<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:600;'
+            f'padding:2px 8px;border-radius:100px;background:#fff;border:1px solid {_BORDER};'
+            f'color:{_GRAY};font-family:Manrope,sans-serif;margin:0 3px 3px 0;'
+            f'white-space:nowrap;">{label}</span>')
+
+def _product_bubbles_html(prod: str) -> str:
+    specs = [FORMATS[sk] for sk in FORMAT_GROUPS.get(prod, [])]
+    fmts  = sorted({f for s in specs for f in s.get("allowed_formats", [])})
+    has_video  = any(s.get("is_video") for s in specs)
+    has_anim   = any(s.get("max_animation_s") for s in specs if not s.get("is_video"))
+    sizes_kb   = [s["max_file_size_kb"] for s in specs if s.get("max_file_size_kb")]
+    max_kb     = max(sizes_kb) if sizes_kb else None
+    parts = [_white_bubble(f) for f in fmts]
+    if max_kb:
+        parts.append(_white_bubble(f"≤ {max_kb} KB"))
+    if has_video:
+        parts.append(_white_bubble("Video"))
+    elif has_anim:
+        parts.append(_white_bubble("Animated OK"))
+    else:
+        parts.append(_white_bubble("Static only"))
+    return f'<div style="display:flex;flex-wrap:wrap;margin:3px 0 8px 0;">{"".join(parts)}</div>'
+
+def _asset_bubbles_html(spec: dict) -> str:
+    fmts = spec.get("allowed_formats", [])
+    parts = [_white_bubble(f) for f in fmts]
+    if spec.get("max_file_size_kb"):
+        parts.append(_white_bubble(f"≤ {spec['max_file_size_kb']} KB"))
+    elif spec.get("video_max_size_mb"):
+        parts.append(_white_bubble(f"≤ {spec['video_max_size_mb']} MB"))
+    else:
+        parts.append(_white_bubble("No size limit"))
+    if spec.get("max_animation_s"):
+        parts.append(_white_bubble(f"Max {spec['max_animation_s']}s"))
+    if spec.get("video_max_duration_s"):
+        parts.append(_white_bubble(f"{spec['video_min_duration_s']}–{spec['video_max_duration_s']}s"))
+    return f'<div style="display:flex;flex-wrap:wrap;margin:2px 0 6px 18px;">{"".join(parts)}</div>'
+
 # ── Feedback helpers ───────────────────────────────────────────────────────────
 def _build_feedback(items: list[dict], campaign: str = "") -> str:
     date_str = datetime.date.today().strftime("%d %B %Y")
@@ -369,6 +408,7 @@ with left_col:
             sel.append(prod)
         elif not new_val and prod in sel:
             sel.remove(prod)
+        st.markdown(_product_bubbles_html(prod), unsafe_allow_html=True)
 
     st.markdown(_hairline(), unsafe_allow_html=True)
     st.markdown(_section_label("Required assets"), unsafe_allow_html=True)
@@ -396,7 +436,8 @@ with left_col:
                     f'color:{_GRAY};flex-shrink:0;">{dim}</span>'
                     f'<span style="font-size:11px;color:{_JET};white-space:nowrap;'
                     f'overflow:hidden;text-overflow:ellipsis;">{short}</span>'
-                    f'</div>',
+                    f'</div>'
+                    + _asset_bubbles_html(s),
                     unsafe_allow_html=True,
                 )
 
@@ -435,6 +476,7 @@ with right_col:
         type=["jpg", "jpeg", "png", "gif", "mp4", "mov", "flv", "webm", "zip"],
         accept_multiple_files=True,
         key="main_upload",
+        label_visibility="collapsed",
     )
 
     # ── Empty state ────────────────────────────────────────────────────────────
