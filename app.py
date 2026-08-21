@@ -260,18 +260,26 @@ p, span, label, div { color: #3A3A3A; }
    The Ad-products card is three stacked Streamlit elements (header HTML, the
    checkbox widgets, footer HTML). Collapse the gaps between them and give each
    piece only the borders it needs so they read as one continuous card.       */
-/* Collapse the gap in whichever vertical block holds the product checkboxes,
-   so header HTML + rows + footer HTML butt up into one card. */
-[data-testid="stVerticalBlock"]:has(> [class*="st-key-chk_"]) {
-    gap: 0 !important;
+/* The whole Ad-products card is one keyed container, so the white background
+   and border live on a single element rather than being stitched across the
+   header, the rows and the footer. */
+.st-key-adproducts_card {
+    background: #ffffff !important;
+    border: 1px solid #DBE3EA !important;
+    border-radius: 10px !important;
+    padding: 16px 12px 14px !important;
+}
+/* The key class lands on the vertical block itself, so match it directly as
+   well as any nested block. */
+.st-key-adproducts_card,
+.st-key-adproducts_card [data-testid="stVerticalBlock"] {
+    gap: 1px !important;
 }
 [class*="st-key-chk_"] { margin: 0 !important; }
 
 [class*="st-key-chk_"] [data-testid="stCheckbox"] {
-    background: #ffffff;
-    border-left: 1px solid #DBE3EA;
-    border-right: 1px solid #DBE3EA;
-    padding: 2px 12px;
+    background: transparent;
+    padding: 0;
     margin: 0 !important;
 }
 [class*="st-key-chk_"] [data-testid="stCheckbox"] > label {
@@ -515,49 +523,46 @@ with left_col:
     sel: list[str] = st.session_state.sel_products
 
     # ── Ad products card ───────────────────────────────────────────────────────
-    # Header, checkbox rows and footer are three separate Streamlit elements, so
-    # each carries only the borders it needs and the CSS collapses the gaps.
-    st.markdown(
-        f'<div style="background:#fff;border:1px solid {_BORDER};border-bottom:none;'
-        f'border-radius:10px 10px 0 0;padding:16px 20px 6px;">'
-        f'<p style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
-        f'text-transform:uppercase;color:{_ROYAL};margin:0;">Ad products</p>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Per-row asset counts, right-aligned via the container class Streamlit
-    # derives from each widget key (.st-key-<key>).
-    count_css = ""
-    for prod in _SELECTOR_PRODUCTS:
-        if prod not in FORMAT_GROUPS:
-            continue
-        key     = "chk_" + re.sub(r"[^a-z0-9]+", "_", prod.lower()).strip("_")
-        count   = len(FORMAT_GROUPS[prod])
-        count_css += (
-            f'.st-key-{key} [data-testid="stCheckbox"] > label::after'
-            f'{{content:"{count}";}}'
+    # One keyed container carries the whole card (white bg, border, radius) via
+    # its .st-key-adproducts_card class, so the header, the checkbox rows and
+    # the footer do not have to stitch borders together across sibling elements.
+    with st.container(key="adproducts_card"):
+        st.markdown(
+            f'<p style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
+            f'text-transform:uppercase;color:{_ROYAL};margin:0 0 6px;">Ad products</p>',
+            unsafe_allow_html=True,
         )
-        new_val = st.checkbox(prod, value=prod in sel, key=key)
-        if new_val and prod not in sel:
-            sel.append(prod)
-        elif not new_val and prod in sel:
-            sel.remove(prod)
 
-    st.markdown(f"<style>{count_css}</style>", unsafe_allow_html=True)
+        # Per-row asset counts, right-aligned via the container class Streamlit
+        # derives from each widget key (.st-key-<key>).
+        count_css = ""
+        for prod in _SELECTOR_PRODUCTS:
+            if prod not in FORMAT_GROUPS:
+                continue
+            key   = "chk_" + re.sub(r"[^a-z0-9]+", "_", prod.lower()).strip("_")
+            count = len(FORMAT_GROUPS[prod])
+            count_css += (
+                f'.st-key-{key} [data-testid="stCheckbox"] > label::after'
+                f'{{content:"{count}";}}'
+            )
+            new_val = st.checkbox(prod, value=prod in sel, key=key)
+            if new_val and prod not in sel:
+                sel.append(prod)
+            elif not new_val and prod in sel:
+                sel.remove(prod)
 
-    total_assets = sum(len(FORMAT_GROUPS[p]) for p in sel if p in FORMAT_GROUPS)
-    st.markdown(
-        f'<div style="background:#fff;border:1px solid {_BORDER};border-top:none;'
-        f'border-radius:0 0 10px 10px;padding:0 20px 14px;">'
-        f'<div style="display:flex;justify-content:space-between;'
-        f'border-top:1px solid {_HAIR};padding-top:12px;margin-top:8px;">'
-        f'<span style="font-size:11px;color:{_GRAY};">'
-        f'{len(sel)} product{"s" if len(sel)!=1 else ""} selected</span>'
-        f'<span style="font-size:11px;font-weight:700;color:{_ROYAL};">'
-        f'{total_assets} assets</span></div></div>',
-        unsafe_allow_html=True,
-    )
+        st.markdown(f"<style>{count_css}</style>", unsafe_allow_html=True)
+
+        total_assets = sum(len(FORMAT_GROUPS[p]) for p in sel if p in FORMAT_GROUPS)
+        st.markdown(
+            f'<div style="display:flex;justify-content:space-between;'
+            f'border-top:1px solid {_HAIR};padding-top:12px;margin-top:10px;">'
+            f'<span style="font-size:11px;color:{_GRAY};">'
+            f'{len(sel)} product{"s" if len(sel)!=1 else ""} selected</span>'
+            f'<span style="font-size:11px;font-weight:700;color:{_ROYAL};">'
+            f'{total_assets} assets</span></div>',
+            unsafe_allow_html=True,
+        )
 
     # ── Required assets card (pure HTML — inline bg always works) ──────────────
     assets_html = ""
