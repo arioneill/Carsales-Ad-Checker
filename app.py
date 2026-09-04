@@ -9,7 +9,7 @@ from PIL import Image
 
 from specs import FORMATS, FORMAT_GROUPS, group_slots, slot_base, slot_label
 from checker import run_all_checks, run_video_checks, CheckResult
-from fixer import apply_fixes
+from fixer import apply_fixes, compress_to_jpeg, compress_to_png
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 _VIDEO_EXTS = frozenset({".mp4", ".mov", ".flv", ".webm"})
@@ -57,6 +57,7 @@ _ACTION_HINTS = {
     "compress":   "Please reduce the file size to meet the limit.",
     "convert":    "Please convert to the required file format.",
     "add_border": "Please add a 1px solid border around the creative.",
+    "resize":     "Please supply the creative at the required dimensions.",
 }
 
 # ── Page config ────────────────────────────────────────────────────────────────
@@ -1057,3 +1058,76 @@ with right_col:
                                     font-family:Manrope,sans-serif;">📋 Copy to clipboard</button>""",
                     height=52,
                 )
+
+    # ── Quick compress ─────────────────────────────────────────────────────────
+    # Standalone shrink tool: no product selection, no spec matching, no report.
+    # For when you already know a file is just over the limit.
+    st.markdown(_hairline(), unsafe_allow_html=True)
+
+    with st.expander("🗜  Quick compress — shrink a file without running a check"):
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            target_kb = st.number_input(
+                "Target size (KB)", min_value=5, max_value=10_000,
+                value=80, step=5, key="qc_target",
+                help="80 KB is the carsales Network display limit.",
+            )
+        with c2:
+            keep_png = st.checkbox(
+                "Keep PNG (preserves transparency)", value=False, key="qc_png",
+                help="Leave off to output JPEG, which compresses far harder. "
+                     "Turn on only if the creative needs a transparent background.",
+            )
+
+        qfiles = st.file_uploader(
+            "Files to compress",
+            type=["jpg", "jpeg", "png"],
+            accept_multiple_files=True,
+            key="quick_compress",
+        )
+
+        for uf in qfiles or []:
+            raw = uf.read()
+            before_kb = len(raw) / 1024
+            try:
+                qimg = Image.open(io.BytesIO(raw)); qimg.load()
+            except Exception:
+                st.warning(f"{uf.name} — could not be read as an image.")
+                continue
+
+            if keep_png:
+                out_bytes, out_ext = compress_to_png(qimg, target_kb), "png"
+            else:
+                out_bytes, out_ext = compress_to_jpeg(qimg, target_kb), "jpg"
+
+            after_kb = len(out_bytes) / 1024
+            hit      = after_kb <= target_kb
+            saved    = (1 - after_kb / before_kb) * 100 if before_kb else 0
+
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;'
+                f'margin:10px 0 4px;">'
+                f'<span style="font-family:IBM Plex Mono,monospace;font-size:13px;'
+                f'color:{_JET};">{uf.name}</span>'
+                f'<span style="font-size:12px;color:{_GRAY};">'
+                f'{before_kb:.1f} KB → </span>'
+                f'<span style="font-size:12px;font-weight:700;'
+                f'color:{_MINT_T if hit else _AMBER};">{after_kb:.1f} KB</span>'
+                f'<span style="font-size:11px;color:{_GRAY};">({saved:.0f}% smaller)</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            if not hit:
+                st.caption(
+                    f"Could not reach {target_kb} KB without dropping below usable "
+                    f"quality — this is as small as it goes"
+                    + (" in PNG. Untick “Keep PNG” to compress harder." if keep_png else ".")
+                )
+
+            base = os.path.splitext(uf.name)[0]
+            st.download_button(
+                f"⬇  Download  {base}_compressed.{out_ext}",
+                out_bytes, f"{base}_compressed.{out_ext}",
+                f"image/{'png' if out_ext == 'png' else 'jpeg'}",
+                key=f"qc_dl_{uf.name}",
+            )

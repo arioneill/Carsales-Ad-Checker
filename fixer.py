@@ -69,7 +69,15 @@ def apply_fixes(
         current_fmt = target
         applied.append(f"Converted format to {target}")
 
-    # 2. Border
+    # 2. Resize. Only ever reached when checker._resize_verdict cleared it as a
+    #    pure downscale at the same aspect ratio, so nothing is cropped.
+    if "resize" in fix_map and spec.get("dimensions"):
+        ew, eh = spec["dimensions"]
+        if img.size != (ew, eh):
+            img = img.resize((ew, eh), Image.LANCZOS)
+            applied.append(f"Resized to {ew}×{eh}")
+
+    # 3. Border — after the resize, or it would be scaled away
     if "add_border" in fix_map:
         img = add_border(img)
         applied.append("Added 1px grey border")

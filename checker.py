@@ -39,16 +39,40 @@ def check_dimensions(img: Image.Image, spec: dict) -> CheckResult:
 
     ew, eh = spec["dimensions"]
     passed = (w == ew and h == eh)
+    if passed:
+        return CheckResult(name="Dimensions", passed=True, message=f"{w}×{h}px ✓")
+
     is_animated = getattr(img, "n_frames", 1) > 1
+    can_resize, why = _resize_verdict(w, h, ew, eh, is_animated)
 
     return CheckResult(
         name="Dimensions",
-        passed=passed,
-        message=f"{w}×{h}px {'✓' if passed else f'— required {ew}×{eh}px'}",
-        fixable=False,
-        fix_action=None,
-        needs_client=not passed,
+        passed=False,
+        message=f"{w}×{h}px — required {ew}×{eh}px" + (f" ({why})" if why else ""),
+        fixable=can_resize,
+        fix_action="resize" if can_resize else None,
+        needs_client=not can_resize,
     )
+
+
+# Resizing is only ever safe as a pure scale. Anything else means cropping or
+# stretching someone's brand creative on their behalf, which is a design
+# decision the checker has no business making — those go back to the client.
+_AR_TOLERANCE = 0.005
+
+
+def _resize_verdict(w: int, h: int, ew: int, eh: int,
+                    is_animated: bool) -> tuple[bool, str]:
+    """Can w×h become ew×eh by scaling alone? Returns (ok, reason_if_not)."""
+    if is_animated:
+        return False, "animated — resize would drop the animation"
+    if h == 0 or eh == 0:
+        return False, ""
+    if abs((w / h) - (ew / eh)) > _AR_TOLERANCE * (ew / eh):
+        return False, "different shape — resizing would crop or stretch it"
+    if w < ew or h < eh:
+        return False, "smaller than required — upscaling would soften it"
+    return True, ""
 
 
 def check_file_format(fmt: str, spec: dict) -> CheckResult:
