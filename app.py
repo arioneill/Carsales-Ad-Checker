@@ -7,7 +7,8 @@ import streamlit as st
 import streamlit.components.v1 as components
 from PIL import Image
 
-from specs import FORMATS, FORMAT_GROUPS, group_slots, slot_base, slot_label
+from specs import (FORMATS, FORMAT_GROUPS, group_slots, slot_base, slot_label,
+                   is_unlimited)
 from checker import run_all_checks, run_video_checks, CheckResult
 from fixer import apply_fixes, compress_to_jpeg, compress_to_png
 
@@ -404,6 +405,31 @@ if "upload_nonce" not in st.session_state:
     st.session_state.upload_nonce = 0
 
 # ── Cached helpers ─────────────────────────────────────────────────────────────
+def _open_extra_slot(w: int, h: int, expected: list[str],
+                     expected_img: list[str]) -> str | None:
+    """Grow an unlimited spec (carousel cards) to fit one more file.
+
+    min_count is a floor, not a quota, so a fourth card should be checked like
+    the first three rather than reported as unmatched. The new slot is inserted
+    beside its siblings so the results stay grouped.
+    """
+    for base in dict.fromkeys(slot_base(s) for s in expected):
+        spec = FORMATS[base]
+        if not spec.get("unlimited") or spec.get("is_video"):
+            continue
+        fits = ((spec["dimensions"] and tuple(spec["dimensions"]) == (w, h))
+                or (spec.get("aspect_ratio") == "1:1"
+                    and spec["dimensions"] is None and w == h))
+        if not fits:
+            continue
+        siblings = [s for s in expected if slot_base(s) == base]
+        new_slot = f"{base}#{len(siblings) + 1}"
+        expected.insert(expected.index(siblings[-1]) + 1, new_slot)
+        expected_img.append(new_slot)
+        return new_slot
+    return None
+
+
 @st.cache_data(show_spinner=False)
 def _img_checks(fb: bytes, fmt: str, spec_key: str) -> list:
     spec = FORMATS[slot_base(spec_key)]
@@ -589,7 +615,9 @@ with left_col:
             if prod not in FORMAT_GROUPS:
                 continue
             key   = "chk_" + re.sub(r"[^a-z0-9]+", "_", prod.lower()).strip("_")
-            count = len(group_slots(prod))
+            count = str(len(group_slots(prod)))
+            if any(FORMATS[k].get("unlimited") for k in FORMAT_GROUPS[prod]):
+                count += "+"   # a floor, not a quota
             count_css += (
                 f'.st-key-{key} [data-testid="stCheckbox"] > label::after'
                 f'{{content:"{count}";}}'
@@ -646,6 +674,11 @@ with left_col:
                 f'color:{_GRAY};flex-shrink:0;min-width:52px;">{dim}</span>'
                 f'<span style="font-size:11px;color:{_JET};">{short}</span>'
                 f'</div>'
+            )
+        if any(FORMATS[k].get("unlimited") for k in FORMAT_GROUPS[prod]):
+            assets_html += (
+                f'<div style="font-size:10px;color:{_GRAY};font-style:italic;'
+                f'margin:2px 0 0 16px;">+ further cards accepted, no maximum</div>'
             )
 
     fmt_str  = ", ".join(sorted(all_fmts)) if all_fmts else "—"
@@ -796,6 +829,8 @@ with right_col:
                         best = sk; break
                     if s.get("aspect_ratio") == "1:1" and s["dimensions"] is None and w == h:
                         best = sk; break
+                if best is None:
+                    best = _open_extra_slot(w, h, expected, expected_img)
                 if best:
                     checks = _img_checks(fb, fmt, best)
                     matched[best] = {

@@ -4,7 +4,7 @@
 def _spec(name, group, dimensions, accepted_formats, max_file_size_kb,
           animation_max_seconds=None, animation_max_plays=None, max_fps=None,
           border=False, aspect_ratio=None, clear_zone_top_px=None,
-          logo_white_bg_required=False, min_count=1,
+          logo_white_bg_required=False, min_count=1, unlimited=False,
           is_video=False, video_formats=None, video_max_size_mb=None,
           video_min_duration_s=None, video_max_duration_s=None,
           video_aspect_ratios=None, video_min_px=None, video_max_px=None,
@@ -14,6 +14,7 @@ def _spec(name, group, dimensions, accepted_formats, max_file_size_kb,
         "group": group,
         "dimensions": dimensions,
         "min_count": min_count,
+        "unlimited": unlimited,   # min_count is a floor, extra files welcome
         "accepted_formats": accepted_formats,
         "max_file_size_kb": max_file_size_kb,
         "animation_max_seconds": animation_max_seconds,
@@ -206,7 +207,7 @@ FORMATS = {
     "carousel_card_image": _spec(
         "carsales Carousel — Card Image (627×627)", "carsales Carousel",
         (627, 627), ["JPEG", "PNG"], 100,
-        min_count=3,   # a carousel needs at least three cards to run
+        min_count=3, unlimited=True,   # at least three cards, no upper limit
     ),
 
     # ── CARSALES DISCOVER ─────────────────────────────────────────────────────
@@ -433,9 +434,17 @@ def group_slots(group: str) -> list[str]:
 def slot_label(slot: str) -> str:
     base = slot_base(slot)
     name = FORMATS[base]["name"]
-    if "#" in slot:
-        return f"{name} — {slot.split('#', 1)[1]} of {FORMATS[base]['min_count']}"
-    return name
+    if "#" not in slot:
+        return name
+    n = slot.split("#", 1)[1]
+    if FORMATS[base].get("unlimited"):
+        return f"{name} — card {n}"
+    return f"{name} — {n} of {FORMATS[base]['min_count']}"
+
+
+def is_unlimited(slot: str) -> bool:
+    """True when a spec takes any number of files above its min_count."""
+    return bool(FORMATS[slot_base(slot)].get("unlimited"))
 
 CARD_TEXT_LIMITS = {
     "Headline Text": 30,
