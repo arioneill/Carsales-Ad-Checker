@@ -4,7 +4,7 @@
 def _spec(name, group, dimensions, accepted_formats, max_file_size_kb,
           animation_max_seconds=None, animation_max_plays=None, max_fps=None,
           border=False, aspect_ratio=None, clear_zone_top_px=None,
-          logo_white_bg_required=False,
+          logo_white_bg_required=False, min_count=1,
           is_video=False, video_formats=None, video_max_size_mb=None,
           video_min_duration_s=None, video_max_duration_s=None,
           video_aspect_ratios=None, video_min_px=None, video_max_px=None,
@@ -13,6 +13,7 @@ def _spec(name, group, dimensions, accepted_formats, max_file_size_kb,
         "name": name,
         "group": group,
         "dimensions": dimensions,
+        "min_count": min_count,
         "accepted_formats": accepted_formats,
         "max_file_size_kb": max_file_size_kb,
         "animation_max_seconds": animation_max_seconds,
@@ -43,19 +44,16 @@ FORMATS = {
         (728, 90), ["JPEG", "GIF"], 80,
         animation_max_seconds=15, animation_max_plays=3, max_fps=24, border=True,
     ),
+    # One 300×250 serves both desktop and mobile MREC placements — listing them
+    # as separate assets made the checker ask for the same file twice.
     "display_desktop_300x250": _spec(
-        "Network Display — Desktop MREC (300×250)", "Network Display",
+        "Network Display — MREC (300×250)", "Network Display",
         (300, 250), ["JPEG", "GIF"], 80,
         animation_max_seconds=15, animation_max_plays=3, max_fps=24, border=True,
     ),
     "display_desktop_300x600": _spec(
         "Network Display — Desktop Half Page (300×600)", "Network Display",
         (300, 600), ["JPEG", "GIF"], 80,
-        animation_max_seconds=15, animation_max_plays=3, max_fps=24, border=True,
-    ),
-    "display_mobile_300x250": _spec(
-        "Network Display — Mobile MREC (300×250)", "Network Display",
-        (300, 250), ["JPEG", "GIF"], 80,
         animation_max_seconds=15, animation_max_plays=3, max_fps=24, border=True,
     ),
     "display_mobile_300x100": _spec(
@@ -100,7 +98,7 @@ FORMATS = {
         animation_max_seconds=15, animation_max_plays=3, max_fps=24, border=True,
     ),
     "brand_terms_300x250": _spec(
-        "Brand Terms — Desktop MREC (300×250)", "Brand Terms",
+        "Brand Terms — MREC (300×250)", "Brand Terms",
         (300, 250), ["JPEG", "GIF"], 80,
         animation_max_seconds=15, animation_max_plays=3, max_fps=24, border=True,
     ),
@@ -112,11 +110,6 @@ FORMATS = {
     "brand_terms_970x250": _spec(
         "Brand Terms — Desktop Billboard (970×250)", "Brand Terms",
         (970, 250), ["JPEG", "GIF"], 80,
-        animation_max_seconds=15, animation_max_plays=3, max_fps=24, border=True,
-    ),
-    "brand_terms_mobile_300x250": _spec(
-        "Brand Terms — Mobile MREC (300×250)", "Brand Terms",
-        (300, 250), ["JPEG", "GIF"], 80,
         animation_max_seconds=15, animation_max_plays=3, max_fps=24, border=True,
     ),
     "brand_terms_mobile_300x100": _spec(
@@ -213,6 +206,7 @@ FORMATS = {
     "carousel_card_image": _spec(
         "carsales Carousel — Card Image (627×627)", "carsales Carousel",
         (627, 627), ["JPEG", "PNG"], 100,
+        min_count=3,   # a carousel needs at least three cards to run
     ),
 
     # ── CARSALES DISCOVER ─────────────────────────────────────────────────────
@@ -349,14 +343,16 @@ FORMATS = {
     ),
 
     # ── XT PRE-ROLL VIDEO ────────────────────────────────────────────────────
+    # 960×540 is the recommended size, not a hard lock — pinning min and max to
+    # it rejected in-spec HD masters. Accept anything 16:9 from 640×360 to HD.
     "xt_preroll_video": _spec(
-        "XT Pre-Roll Video — 960×540 (16:9)", "XT Pre-Roll Video",
+        "XT Pre-Roll Video — 16:9 (960×540 recommended)", "XT Pre-Roll Video",
         None, ["MP4", "FLV", "WEBM"], None,
         is_video=True, video_formats=["MP4", "FLV", "WEBM"],
         video_max_size_mb=None,
-        video_min_duration_s=15, video_max_duration_s=30,
+        video_min_duration_s=6, video_max_duration_s=30,
         video_aspect_ratios=["16:9"],
-        video_min_resolution=(960, 540), video_max_resolution=(960, 540),
+        video_min_resolution=(640, 360), video_max_resolution=(1920, 1080),
     ),
 
     # ── XT CONNECTED TV ──────────────────────────────────────────────────────
@@ -372,7 +368,13 @@ FORMATS = {
 }
 
 
-# Group order controls dropdown display order
+# Group order controls display order in the product selector.
+#
+# Deliberately excluded — these run on logo and text supplied in Ignition and
+# take no creative file, so there is nothing for the checker to check:
+#   Unmissable, Sponsored Search, Guaranteed Consideration, Stock Boost
+# Their FORMATS entries are kept so they can be restored by re-adding the group
+# name below if that ever changes.
 _GROUP_ORDER = [
     # On Network
     "Network Display",
@@ -381,17 +383,13 @@ _GROUP_ORDER = [
     "Brand Terms",
     "New Car Showroom & Research",
     "Auto Unmissable High-Impact",
-    "Unmissable",
     "carsales Carousel",
     "carsales Discover",
-    "Sponsored Search",
     "Newsletter",
     "Tile",
     "Push Notifications",
     "In Feed Video",
     "Outstream Video",
-    "Guaranteed Consideration",
-    "Stock Boost",
     # Off Network (XT)
     "XT Social Newsfeed",
     "XT Premium Display",
@@ -404,6 +402,40 @@ FORMAT_GROUPS = {
     group: [k for k, v in FORMATS.items() if v["group"] == group]
     for group in _GROUP_ORDER
 }
+
+
+# ── Asset slots ───────────────────────────────────────────────────────────────
+# Most specs want one file, but some (carousel cards) want several. A "slot" is
+# one file the client owes us: "carousel_card_image#2" is the second card. Slot
+# ids stay plain spec keys wherever min_count is 1, so single-file specs are
+# unaffected.
+
+def slot_base(slot: str) -> str:
+    """The spec key behind a slot id."""
+    return slot.split("#", 1)[0]
+
+
+def spec_slots(spec_key: str) -> list[str]:
+    n = FORMATS[spec_key].get("min_count") or 1
+    if n == 1:
+        return [spec_key]
+    return [f"{spec_key}#{i + 1}" for i in range(n)]
+
+
+def group_slots(group: str) -> list[str]:
+    """Every file a product needs, one entry per file."""
+    slots: list[str] = []
+    for key in FORMAT_GROUPS.get(group, []):
+        slots.extend(spec_slots(key))
+    return slots
+
+
+def slot_label(slot: str) -> str:
+    base = slot_base(slot)
+    name = FORMATS[base]["name"]
+    if "#" in slot:
+        return f"{name} — {slot.split('#', 1)[1]} of {FORMATS[base]['min_count']}"
+    return name
 
 CARD_TEXT_LIMITS = {
     "Headline Text": 30,

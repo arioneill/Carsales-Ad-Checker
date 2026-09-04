@@ -7,7 +7,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from PIL import Image
 
-from specs import FORMATS, FORMAT_GROUPS
+from specs import FORMATS, FORMAT_GROUPS, group_slots, slot_base, slot_label
 from checker import run_all_checks, run_video_checks, CheckResult
 from fixer import apply_fixes
 
@@ -15,25 +15,23 @@ from fixer import apply_fixes
 _VIDEO_EXTS = frozenset({".mp4", ".mov", ".flv", ".webm"})
 _IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".gif"})
 
-# Products shown in selector (order matters)
+# Products shown in selector (order matters).
+# Unmissable, Sponsored Search, Guaranteed Consideration and Stock Boost are
+# absent on purpose — they take no creative file. See _GROUP_ORDER in specs.py.
 _SELECTOR_PRODUCTS = [
     "Network Display",
     "Roadblock",
     "carsales Card",
     "Brand Terms",
     "Auto Unmissable High-Impact",
-    "Unmissable",
     "carsales Carousel",
     "carsales Discover",
     "In Feed Video",
     "Outstream Video",
     "New Car Showroom & Research",
-    "Sponsored Search",
     "Newsletter",
     "Tile",
     "Push Notifications",
-    "Guaranteed Consideration",
-    "Stock Boost",
     "XT Social Newsfeed",
     "XT Premium Display",
     "XT Display",
@@ -399,17 +397,21 @@ if "sel_products" not in st.session_state:
     st.session_state.sel_products = ["Network Display"]
 if "only_issues" not in st.session_state:
     st.session_state.only_issues = False
+# Bumping this changes the uploader's widget key, which is the only way to drop
+# every staged file at once — Streamlit has no API to clear a file_uploader.
+if "upload_nonce" not in st.session_state:
+    st.session_state.upload_nonce = 0
 
 # ── Cached helpers ─────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def _img_checks(fb: bytes, fmt: str, spec_key: str) -> list:
-    spec = FORMATS[spec_key]
+    spec = FORMATS[slot_base(spec_key)]
     img  = Image.open(io.BytesIO(fb)); img.load()
     return run_all_checks(img, fb, fmt, spec)
 
 @st.cache_data(show_spinner=False)
 def _vid_checks(fb: bytes, fname: str, spec_key: str) -> list:
-    return run_video_checks(fb, fname, FORMATS[spec_key])
+    return run_video_checks(fb, fname, FORMATS[slot_base(spec_key)])
 
 # ── Dimension → spec lookup ────────────────────────────────────────────────────
 _DIM_LOOKUP: dict = {}
@@ -493,10 +495,14 @@ def _hairline() -> str:
     return f'<div style="height:1px;background:{_HAIR};margin:14px 0;"></div>'
 
 # ── Feedback helpers ───────────────────────────────────────────────────────────
-def _build_feedback(items: list[dict], campaign: str = "") -> str:
+def _build_feedback(items: list[dict], campaign: str = "",
+                    skipped: list[dict] | None = None,
+                    missing: list[str] | None = None) -> str:
     date_str = datetime.date.today().strftime("%d %B %Y")
     heading  = f"Creative Submission Review{' — ' + campaign if campaign else ''}"
-    has_client  = any(d["client_checks"]  for d in items)
+    skipped  = skipped or []
+    missing  = missing or []
+    has_client  = any(d["client_checks"]  for d in items) or bool(skipped) or bool(missing)
     has_fixable = any(d["fixable_checks"] for d in items)
     L: list[str] = [
         f"Subject: {heading}", f"Date: {date_str}", "",
@@ -518,6 +524,25 @@ def _build_feedback(items: list[dict], campaign: str = "") -> str:
                 hint = _ACTION_HINTS.get(getattr(c, "fix_action", None) or "", "")
                 L.append(f"    • {c.name}: {c.message}" + (f" {hint}" if hint else ""))
             L.append("")
+    # Skipped files are the ones most worth spelling out: they are usually a
+    # correctly named asset built to the wrong size, so quote the dimensions we
+    # actually measured rather than just saying the file was ignored.
+    if skipped:
+        L += ["─" * 48, "FILES WE COULD NOT MATCH TO A SPEC", "─" * 48, ""]
+        for s in skipped:
+            dims = f"{s['w']}×{s['h']}px" if s.get("w") else "dimensions unreadable"
+            L.append(f"  {s['fname']}  —  supplied at {dims}")
+        L += ["",
+              "These did not match the dimensions of any placement on this booking.",
+              "Please check them against the required sizes listed below and resupply.",
+              ""]
+
+    if missing:
+        L += ["─" * 48, "ASSETS STILL OUTSTANDING", "─" * 48, ""]
+        for name in missing:
+            L.append(f"  {name}")
+        L.append("")
+
     if has_fixable:
         L += ["─" * 48, "ITEMS CORRECTED ON YOUR BEHALF", "─" * 48, ""]
         for d in items:
@@ -563,7 +588,7 @@ with left_col:
             if prod not in FORMAT_GROUPS:
                 continue
             key   = "chk_" + re.sub(r"[^a-z0-9]+", "_", prod.lower()).strip("_")
-            count = len(FORMAT_GROUPS[prod])
+            count = len(group_slots(prod))
             count_css += (
                 f'.st-key-{key} [data-testid="stCheckbox"] > label::after'
                 f'{{content:"{count}";}}'
@@ -576,7 +601,7 @@ with left_col:
 
         st.markdown(f"<style>{count_css}</style>", unsafe_allow_html=True)
 
-        total_assets = sum(len(FORMAT_GROUPS[p]) for p in sel if p in FORMAT_GROUPS)
+        total_assets = sum(len(group_slots(p)) for p in sel if p in FORMAT_GROUPS)
         st.markdown(
             f'<div style="display:flex;justify-content:space-between;'
             f'border-top:1px solid {_HAIR};padding-top:12px;margin-top:10px;">'
@@ -601,10 +626,11 @@ with left_col:
             f'<p style="font-size:11px;font-weight:700;color:{_ROYAL};margin:10px 0 4px;">'
             f'{prod}</p>'
         )
-        for i, sk in enumerate(FORMAT_GROUPS[prod]):
-            s     = FORMATS[sk]
+        for i, slot in enumerate(group_slots(prod)):
+            s     = FORMATS[slot_base(slot)]
             dim   = _dim_str(s)
-            short = s["name"].split("—")[-1].strip() if "—" in s["name"] else s["name"]
+            full  = slot_label(slot)
+            short = full.split("—", 1)[-1].strip() if "—" in full else full
             dot   = _MINT if i == 0 else _RED
             all_fmts.update(f.upper() for f in (s.get("accepted_formats") or []))
             all_fmts.update(f.upper() for f in (s.get("video_formats") or []))
@@ -683,9 +709,15 @@ with right_col:
         "",
         type=["jpg", "jpeg", "png", "gif", "mp4", "mov", "flv", "webm", "zip"],
         accept_multiple_files=True,
-        key="main_upload",
+        key=f"main_upload_{st.session_state.upload_nonce}",
         label_visibility="collapsed",
     )
+
+    if uploaded:
+        n = len(uploaded)
+        if st.button(f"✕  Clear all {n} file{'s' if n != 1 else ''}", key="clear_all"):
+            st.session_state.upload_nonce += 1
+            st.rerun()
 
     st.markdown(
         f'<p style="text-align:center;font-size:12px;color:{_GRAY};margin:8px 0 0;">'
@@ -713,14 +745,15 @@ with right_col:
 
     # ── Results state ──────────────────────────────────────────────────────────
     else:
-        # Build expected spec set
+        # Build the expected slot list — one entry per file the client owes us,
+        # so a spec wanting three files (carousel cards) contributes three.
         expected: list[str] = []
         for p in sel:
             if p in FORMAT_GROUPS:
-                expected.extend(FORMAT_GROUPS[p])
+                expected.extend(group_slots(p))
 
-        expected_img = [k for k in expected if not FORMATS[k].get("is_video")]
-        expected_vid = [k for k in expected if FORMATS[k].get("is_video")]
+        expected_img = [k for k in expected if not FORMATS[slot_base(k)].get("is_video")]
+        expected_vid = [k for k in expected if FORMATS[slot_base(k)].get("is_video")]
 
         # Read all files (expand ZIPs)
         all_files: list[tuple[str, bytes]] = []
@@ -757,7 +790,7 @@ with right_col:
                 for sk in expected_img:
                     if sk in matched:
                         continue
-                    s = FORMATS[sk]
+                    s = FORMATS[slot_base(sk)]
                     if s["dimensions"] and tuple(s["dimensions"]) == (w, h):
                         best = sk; break
                     if s.get("aspect_ratio") == "1:1" and s["dimensions"] is None and w == h:
@@ -832,7 +865,7 @@ with right_col:
             status = r["status"]
             if only_issues and status == "pass":
                 continue
-            spec   = FORMATS[sk]
+            spec   = FORMATS[slot_base(sk)]
             fname  = r["filename"]
             checks = r["checks"]
             bc     = _bc[status]
@@ -855,7 +888,7 @@ with right_col:
                                font-weight:500;color:{_JET};">{fname}</span>
                   {_badge(status)}
                 </div>
-                <div style="font-size:11px;color:{_GRAY};margin-bottom:8px;">{spec['name']}</div>
+                <div style="font-size:11px;color:{_GRAY};margin-bottom:8px;">{slot_label(sk)}</div>
                 <div style="display:flex;flex-wrap:wrap;gap:0;">{chips}</div>
                 {f'<div style="font-size:11px;color:{_RED};margin-top:6px;">{failed_msgs}</div>' if failed_msgs else ''}
               </div>
@@ -882,7 +915,7 @@ with right_col:
 
         # ── Missing rows ───────────────────────────────────────────────────────
         for sk in missing_keys:
-            spec = FORMATS[sk]
+            spec = FORMATS[slot_base(sk)]
             dim  = _dim_str(spec)
             st.markdown(f"""
             <div style="display:flex;gap:14px;background:#FFFDF5;border:1px solid {_BORDER};
@@ -898,7 +931,7 @@ with right_col:
                   <span style="font-size:13px;color:{_GRAY};font-style:italic;">No file uploaded</span>
                   {_badge("miss")}
                 </div>
-                <div style="font-size:11px;color:{_GRAY};">{spec['name']}</div>
+                <div style="font-size:11px;color:{_GRAY};">{slot_label(sk)}</div>
               </div>
             </div>
             """, unsafe_allow_html=True)
@@ -955,7 +988,7 @@ with right_col:
                 """, unsafe_allow_html=True)
 
         # ── Footer banner + feedback email ────────────────────────────────────
-        has_issues = fail_keys or fix_keys or missing_keys
+        has_issues = fail_keys or fix_keys or missing_keys or unmatched_imgs
         if has_issues:
             parts = []
             if fail_keys:
@@ -964,6 +997,8 @@ with right_col:
                 parts.append(f"{len(fix_keys)} auto-fixable")
             if missing_keys:
                 parts.append(f"{len(missing_keys)} missing")
+            if unmatched_imgs:
+                parts.append(f"{len(unmatched_imgs)} unmatched")
 
             st.markdown(f"""
             <div style="background:{_ROYAL};border-radius:10px;padding:20px 24px;
@@ -983,7 +1018,7 @@ with right_col:
             issues_for_client = [
                 {
                     "filename":       matched[k]["filename"],
-                    "spec_name":      FORMATS[k]["name"],
+                    "spec_name":      slot_label(k),
                     "client_checks":  [c for c in matched[k]["checks"] if c.needs_client],
                     "fixable_checks": [c for c in matched[k]["checks"] if c.fixable],
                 }
@@ -996,7 +1031,15 @@ with right_col:
                     placeholder="e.g. Toyota Corolla — Aug 2026",
                     key="campaign_name",
                 )
-                email_text = _build_feedback(issues_for_client, campaign)
+                email_text = _build_feedback(
+                    issues_for_client,
+                    campaign,
+                    skipped=unmatched_imgs,
+                    missing=[
+                        f"{slot_label(k)}  —  {_dim_str(FORMATS[slot_base(k)])}"
+                        for k in missing_keys
+                    ],
+                )
                 _bk = "email_base_v2"
                 _ak = "email_textarea_v2"
                 if st.session_state.get(_bk) != email_text:

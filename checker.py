@@ -166,6 +166,12 @@ def check_gif_animation(img: Image.Image, spec: dict) -> list[CheckResult]:
     if not hasattr(img, "n_frames") or img.n_frames <= 1:
         return results
 
+    # Read the loop count BEFORE seeking. Pillow rebuilds img.info per frame, so
+    # the NETSCAPE loop extension recorded on frame 0 is gone once we have
+    # walked the frames — reading it afterwards fell back to the default and
+    # reported every GIF as an infinite loop.
+    loop_val = img.info.get("loop")
+
     # Collect per-frame durations
     durations: list[float] = []
     for i in range(img.n_frames):
@@ -196,9 +202,14 @@ def check_gif_animation(img: Image.Image, spec: dict) -> list[CheckResult]:
         ))
 
     if max_plays is not None:
-        img.seek(0)
-        loop_val = img.info.get("loop", 0)
-        if loop_val == 0:
+        if loop_val is None:
+            # No NETSCAPE loop extension at all — the GIF plays once and stops.
+            results.append(CheckResult(
+                name="Loop / Play Count",
+                passed=True,
+                message="1 play (no loop) ✓",
+            ))
+        elif loop_val == 0:
             # 0 in GIF spec = loop forever
             results.append(CheckResult(
                 name="Loop / Play Count",
@@ -426,7 +437,12 @@ def run_video_checks(file_bytes: bytes, filename: str, spec: dict) -> list[Check
         d = meta["duration_s"]
         min_d = spec.get("video_min_duration_s")
         max_d = spec.get("video_max_duration_s")
-        d_ok = (min_d is None or d >= min_d) and (max_d is None or d <= max_d)
+        # Encoders rarely land on a whole second: a "15s" cut usually measures
+        # 15.02s once the timescale is divided out. Without this tolerance an
+        # in-spec file fails on a rounding artefact.
+        tol = 0.25
+        d_ok = ((min_d is None or d >= min_d - tol)
+                and (max_d is None or d <= max_d + tol))
         range_str = f"{min_d}–{max_d}s" if (min_d and max_d) else ""
         results.append(CheckResult(
             name="Duration",
