@@ -9,7 +9,7 @@ from PIL import Image
 
 from specs import (FORMATS, FORMAT_GROUPS, group_slots, slot_base, slot_label,
                    is_unlimited)
-from checker import run_all_checks, run_video_checks, CheckResult
+from checker import run_all_checks, run_video_checks, CheckResult, _resize_verdict
 from fixer import apply_fixes, compress_to_jpeg, compress_to_png
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -497,6 +497,12 @@ def _row_status(checks: list) -> str:
     if any(c.fixable for c in failed):
         return "fix"
     return "fail"
+
+def _ratio_str(w: int, h: int) -> str:
+    """Aspect ratio in lowest terms, e.g. 728×90 -> '36:5'."""
+    from math import gcd
+    g = gcd(w, h) or 1
+    return f"{w // g}:{h // g}"
 
 def _dim_str(spec: dict) -> str:
     if spec["dimensions"]:
@@ -1093,6 +1099,100 @@ with right_col:
                                     font-family:Manrope,sans-serif;">📋 Copy to clipboard</button>""",
                     height=52,
                 )
+
+    # ── Quick resize ───────────────────────────────────────────────────────────
+    # Standalone scaler. Same rule as the auto-fix: pure scaling only, so a file
+    # is never cropped or stretched to fit. Upscaling is refused by default but
+    # can be overridden, since it only costs sharpness.
+    st.markdown(_hairline(), unsafe_allow_html=True)
+
+    with st.expander("📐  Quick resize — scale a file to a target size"):
+        _known = sorted({tuple(s["dimensions"]) for s in FORMATS.values()
+                         if s["dimensions"]})
+        _opts  = [f"{w}×{h}" for w, h in _known] + ["Custom…"]
+        choice = st.selectbox("Target size", _opts, key="qr_target")
+
+        if choice == "Custom…":
+            k1, k2 = st.columns(2)
+            tw = k1.number_input("Width (px)",  1, 10_000, 300, key="qr_w")
+            th = k2.number_input("Height (px)", 1, 10_000, 250, key="qr_h")
+        else:
+            tw, th = (int(v) for v in choice.split("×"))
+
+        allow_up = st.checkbox(
+            "Allow upscaling", value=False, key="qr_up",
+            help="Off by default — enlarging a file cannot add detail, so the "
+                 "result is softer than a correctly sized original.",
+        )
+
+        st.caption(
+            f"Scaling only. A file whose shape differs from {tw}×{th} is "
+            "rejected rather than cropped or stretched."
+        )
+
+        zfiles = st.file_uploader(
+            "Files to resize",
+            type=["jpg", "jpeg", "png", "gif"],
+            accept_multiple_files=True,
+            key="quick_resize",
+        )
+
+        for uf in zfiles or []:
+            raw = uf.read()
+            try:
+                zimg = Image.open(io.BytesIO(raw)); zimg.load()
+            except Exception:
+                st.warning(f"{uf.name} — could not be read as an image.")
+                continue
+
+            w, h = zimg.size
+            ok, code, why = _resize_verdict(
+                w, h, tw, th, getattr(zimg, "n_frames", 1) > 1
+            )
+            if not ok and code == "upscale" and allow_up:
+                ok, why = True, ""
+
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;'
+                f'margin:12px 0 4px;">'
+                f'<span style="font-family:IBM Plex Mono,monospace;font-size:13px;'
+                f'color:{_JET};">{uf.name}</span>'
+                f'<span style="font-size:12px;color:{_GRAY};">{w}×{h} → </span>'
+                f'<span style="font-size:12px;font-weight:700;'
+                f'color:{_MINT_T if ok else _RED};">'
+                f'{f"{tw}×{th}" if ok else "not resized"}</span></div>',
+                unsafe_allow_html=True,
+            )
+
+            if not ok:
+                st.caption(
+                    why + ("  Tick “Allow upscaling” to override."
+                           if code == "upscale" else
+                           f"  {uf.name} is {_ratio_str(w, h)}; "
+                           f"{tw}×{th} is {_ratio_str(tw, th)}.")
+                )
+                continue
+
+            out_png = zimg.mode in ("RGBA", "LA", "PA") or (zimg.format == "PNG")
+            scaled  = zimg.convert("RGBA" if out_png else "RGB")
+            scaled  = scaled.resize((tw, th), Image.LANCZOS)
+
+            buf = io.BytesIO()
+            if out_png:
+                scaled.save(buf, format="PNG", optimize=True)
+                out_ext, mime = "png", "image/png"
+            else:
+                scaled.save(buf, format="JPEG", quality=92, optimize=True)
+                out_ext, mime = "jpg", "image/jpeg"
+            out_bytes = buf.getvalue()
+
+            base = os.path.splitext(uf.name)[0]
+            st.download_button(
+                f"⬇  Download  {base}_{tw}x{th}.{out_ext}  "
+                f"({len(out_bytes)/1024:.1f} KB)",
+                out_bytes, f"{base}_{tw}x{th}.{out_ext}", mime,
+                key=f"qr_dl_{uf.name}",
+            )
 
     # ── Quick compress ─────────────────────────────────────────────────────────
     # Standalone shrink tool: no product selection, no spec matching, no report.

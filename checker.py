@@ -43,7 +43,7 @@ def check_dimensions(img: Image.Image, spec: dict) -> CheckResult:
         return CheckResult(name="Dimensions", passed=True, message=f"{w}×{h}px ✓")
 
     is_animated = getattr(img, "n_frames", 1) > 1
-    can_resize, why = _resize_verdict(w, h, ew, eh, is_animated)
+    can_resize, _code, why = _resize_verdict(w, h, ew, eh, is_animated)
 
     return CheckResult(
         name="Dimensions",
@@ -62,17 +62,23 @@ _AR_TOLERANCE = 0.005
 
 
 def _resize_verdict(w: int, h: int, ew: int, eh: int,
-                    is_animated: bool) -> tuple[bool, str]:
-    """Can w×h become ew×eh by scaling alone? Returns (ok, reason_if_not)."""
+                    is_animated: bool) -> tuple[bool, str, str]:
+    """Can w×h become ew×eh by scaling alone?
+
+    Returns (ok, reason_code, message). The code lets callers treat the
+    refusals differently: "aspect" is a hard no because it means cropping or
+    stretching, whereas "upscale" only costs sharpness and is a judgement call
+    a person can reasonably overrule.
+    """
     if is_animated:
-        return False, "animated — resize would drop the animation"
+        return False, "animated", "animated — resize would drop the animation"
     if h == 0 or eh == 0:
-        return False, ""
+        return False, "invalid", ""
     if abs((w / h) - (ew / eh)) > _AR_TOLERANCE * (ew / eh):
-        return False, "different shape — resizing would crop or stretch it"
+        return False, "aspect", "different shape — resizing would crop or stretch it"
     if w < ew or h < eh:
-        return False, "smaller than required — upscaling would soften it"
-    return True, ""
+        return False, "upscale", "smaller than required — upscaling would soften it"
+    return True, "", ""
 
 
 def check_file_format(fmt: str, spec: dict) -> CheckResult:
