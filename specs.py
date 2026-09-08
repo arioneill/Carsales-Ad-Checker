@@ -87,9 +87,9 @@ FORMATS = {
         clear_zone_top_px=280,
     ),
     "card_logo": _spec(
-        "carsales Card — Logo (100×100)", "carsales Card",
-        (100, 100), ["JPEG", "PNG"], 100,
-        logo_white_bg_required=True,
+        "carsales Card — Logo (1:1, 100×100 recommended)", "carsales Card",
+        None, ["JPEG", "PNG"], 100,
+        aspect_ratio="1:1", logo_white_bg_required=True,
     ),
 
     # ── BRAND TERMS — STANDARD BANNERS ───────────────────────────────────────
@@ -131,9 +131,9 @@ FORMATS = {
         (1065, 210), ["JPEG", "PNG"], 300,
     ),
     "brand_terms_logo": _spec(
-        "Brand Terms — Logo (250×250)", "Brand Terms",
-        (250, 250), ["PNG"], 50,
-        logo_white_bg_required=True,
+        "Brand Terms — Logo (1:1, 250×250 recommended)", "Brand Terms",
+        None, ["PNG"], 50,
+        aspect_ratio="1:1", logo_white_bg_required=True,
     ),
 
     # ── NEW CAR SHOWROOM & RESEARCH ──────────────────────────────────────────
@@ -146,9 +146,9 @@ FORMATS = {
         (800, 400), ["JPEG", "PNG"], 300,
     ),
     "new_car_showroom_logo": _spec(
-        "New Car Showroom & Research — Logo (250×250)", "New Car Showroom & Research",
-        (250, 250), ["PNG"], 50,
-        logo_white_bg_required=True,
+        "New Car Showroom & Research — Logo (1:1, 250×250 recommended)", "New Car Showroom & Research",
+        None, ["PNG"], 50,
+        aspect_ratio="1:1", logo_white_bg_required=True,
     ),
 
     # ── AUTO UNMISSABLE HIGH-IMPACT ──────────────────────────────────────────
@@ -161,9 +161,9 @@ FORMATS = {
         (800, 450), ["JPEG", "PNG"], 300,
     ),
     "auto_unmissable_logo": _spec(
-        "Auto Unmissable High-Impact — Logo (250×250)", "Auto Unmissable High-Impact",
-        (250, 250), ["PNG"], 80,
-        logo_white_bg_required=True,
+        "Auto Unmissable High-Impact — Logo (1:1, 250×250 recommended)", "Auto Unmissable High-Impact",
+        None, ["PNG"], 80,
+        aspect_ratio="1:1", logo_white_bg_required=True,
     ),
     "auto_unmissable_billboard": _spec(
         "Auto Unmissable High-Impact — Billboard (970×250)", "Auto Unmissable High-Impact",
@@ -200,9 +200,9 @@ FORMATS = {
 
     # ── CARSALES CAROUSEL ─────────────────────────────────────────────────────
     "carousel_logo": _spec(
-        "carsales Carousel — Logo (100×100)", "carsales Carousel",
-        (100, 100), ["JPEG", "PNG"], 100,
-        logo_white_bg_required=True,
+        "carsales Carousel — Logo (1:1, 100×100 recommended)", "carsales Carousel",
+        None, ["JPEG", "PNG"], 100,
+        aspect_ratio="1:1", logo_white_bg_required=True,
     ),
     "carousel_card_image": _spec(
         "carsales Carousel — Card Image (627×627)", "carsales Carousel",
@@ -262,9 +262,9 @@ FORMATS = {
         video_min_px=500, video_max_px=1920,
     ),
     "in_feed_video_logo": _spec(
-        "In Feed Video — Logo (200×200)", "In Feed Video",
-        (200, 200), ["JPEG", "PNG"], 100,
-        logo_white_bg_required=True,
+        "In Feed Video — Logo (1:1, 200×200 recommended)", "In Feed Video",
+        None, ["JPEG", "PNG"], 100,
+        aspect_ratio="1:1", logo_white_bg_required=True,
     ),
 
     # ── OUTSTREAM VIDEO ──────────────────────────────────────────────────────
@@ -285,16 +285,16 @@ FORMATS = {
 
     # ── GUARANTEED CONSIDERATION ─────────────────────────────────────────────
     "guaranteed_consideration_logo": _spec(
-        "Guaranteed Consideration — Logo (150×150)", "Guaranteed Consideration",
-        (150, 150), ["JPEG", "PNG"], 200,
-        logo_white_bg_required=True,
+        "Guaranteed Consideration — Logo (1:1, 150×150 recommended)", "Guaranteed Consideration",
+        None, ["JPEG", "PNG"], 200,
+        aspect_ratio="1:1", logo_white_bg_required=True,
     ),
 
     # ── STOCK BOOST ──────────────────────────────────────────────────────────
     "stock_boost_logo": _spec(
-        "Stock Boost — Logo (100×100)", "Stock Boost",
-        (100, 100), ["JPEG", "PNG"], 100,
-        logo_white_bg_required=True,
+        "Stock Boost — Logo (1:1, 100×100 recommended)", "Stock Boost",
+        None, ["JPEG", "PNG"], 100,
+        aspect_ratio="1:1", logo_white_bg_required=True,
     ),
 
     # ── XT SOCIAL NEWSFEED ───────────────────────────────────────────────────

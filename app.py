@@ -1,7 +1,10 @@
 from __future__ import annotations
 import io, os, re, zipfile, datetime
 
-APP_VERSION = "1.6.0"
+# Bump on every release so a deploy can be confirmed at a glance. The build
+# stamp below is derived from the file's own mtime, which on Streamlit Cloud is
+# the checkout time — so it moves on every deploy without being maintained.
+APP_VERSION = "1.7.0"
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -405,6 +408,27 @@ if "upload_nonce" not in st.session_state:
     st.session_state.upload_nonce = 0
 
 # ── Cached helpers ─────────────────────────────────────────────────────────────
+def _find_slot(w: int, h: int, expected_img: list[str], matched: dict,
+               exact: bool) -> str | None:
+    """First free slot this file fits.
+
+    exact=True matches a declared pixel size; exact=False matches a spec that
+    takes any square (logos). Callers run the exact pass first so a sized asset
+    is never consumed by a slot that would have accepted anything square.
+    """
+    for sk in expected_img:
+        if sk in matched:
+            continue
+        s = FORMATS[slot_base(sk)]
+        if exact:
+            if s["dimensions"] and tuple(s["dimensions"]) == (w, h):
+                return sk
+        elif (s.get("aspect_ratio") == "1:1" and s["dimensions"] is None
+                and w == h):
+            return sk
+    return None
+
+
 def _open_extra_slot(w: int, h: int, expected: list[str],
                      expected_img: list[str]) -> str | None:
     """Grow an unlimited spec (carousel cards) to fit one more file.
@@ -497,6 +521,14 @@ def _row_status(checks: list) -> str:
     if any(c.fixable for c in failed):
         return "fix"
     return "fail"
+
+def _build_stamp() -> str:
+    """Deploy time, taken from this file's mtime — the checkout time on Cloud."""
+    try:
+        ts = os.path.getmtime(os.path.abspath(__file__))
+        return datetime.datetime.fromtimestamp(ts).strftime("%d %b %Y, %H:%M")
+    except OSError:
+        return ""
 
 def _ratio_str(w: int, h: int) -> str:
     """Aspect ratio in lowest terms, e.g. 728×90 -> '36:5'."""
@@ -716,7 +748,10 @@ with left_col:
         + (assets_html + footer if sel else
            '<p style="font-size:12px;color:#757575;margin:0;">Select a product above.</p>')
         + f'</div>'
-        + f'<p style="font-size:10px;color:{_GRAY};margin-top:8px;">v{APP_VERSION}</p>',
+        + f'<p style="font-size:10px;color:{_GRAY};margin-top:8px;">'
+          f'v{APP_VERSION}'
+          + (f' &nbsp;·&nbsp; build {_build_stamp()}' if _build_stamp() else '')
+          + f'</p>',
         unsafe_allow_html=True,
     )
 
@@ -826,17 +861,14 @@ with right_col:
                 img = Image.open(io.BytesIO(fb)); img.load()
                 fmt = img.format or ext.lstrip(".").upper() or "JPEG"
                 w, h = img.size
-                best = None
-                for sk in expected_img:
-                    if sk in matched:
-                        continue
-                    s = FORMATS[slot_base(sk)]
-                    if s["dimensions"] and tuple(s["dimensions"]) == (w, h):
-                        best = sk; break
-                    if s.get("aspect_ratio") == "1:1" and s["dimensions"] is None and w == h:
-                        best = sk; break
+                # Two passes: an exact dimension match always beats a slot that
+                # merely accepts "any square", otherwise a 627×627 carousel card
+                # would be swallowed by the logo slot sitting above it.
+                best = _find_slot(w, h, expected_img, matched, exact=True)
                 if best is None:
                     best = _open_extra_slot(w, h, expected, expected_img)
+                if best is None:
+                    best = _find_slot(w, h, expected_img, matched, exact=False)
                 if best:
                     checks = _img_checks(fb, fmt, best)
                     matched[best] = {
