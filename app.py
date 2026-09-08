@@ -4,7 +4,7 @@ import io, os, re, zipfile, datetime
 # Bump on every release so a deploy can be confirmed at a glance. The build
 # stamp below is derived from the file's own mtime, which on Streamlit Cloud is
 # the checkout time — so it moves on every deploy without being maintained.
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.9.0"
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -496,6 +496,7 @@ def _chip(label: str, kind: str) -> str:
         "pass": ("#E3F7F3", _MINT_T),
         "fix":  ("#EBF3FF", _DK_DG),
         "fail": ("#FDECEA", _RED),
+        "note": ("#FFF5E6", _AMBER),
         "mute": ("#F5F5F5", _GRAY),
     }
     bg, fg = colors.get(kind, colors["mute"])
@@ -562,7 +563,9 @@ def _dim_str(spec: dict) -> str:
 def _checks_chips(checks: list) -> str:
     html = ""
     for c in checks:
-        if c.passed:
+        if getattr(c, "advisory", False):
+            html += _chip(f"ⓘ {c.name}", "note")
+        elif c.passed:
             html += _chip(f"✓ {c.name}", "pass")
         elif c.fixable:
             html += _chip(f"🔧 {c.name}", "fix")
@@ -970,7 +973,10 @@ with right_col:
             bc     = _bc[status]
             chips  = _checks_chips(checks)
             dim    = _dim_str(spec)
-            failed_msgs = " · ".join(c.message for c in checks if not c.passed)
+            failed_msgs = " · ".join(c.message for c in checks
+                                     if not c.passed and not getattr(c, "advisory", False))
+            note_msgs   = " · ".join(c.message for c in checks
+                                     if getattr(c, "advisory", False))
 
             st.markdown(f"""
             <div style="display:flex;gap:14px;background:#fff;border:1px solid {_BORDER};
@@ -990,6 +996,7 @@ with right_col:
                 <div style="font-size:11px;color:{_GRAY};margin-bottom:8px;">{slot_label(sk)}</div>
                 <div style="display:flex;flex-wrap:wrap;gap:0;">{chips}</div>
                 {f'<div style="font-size:11px;color:{_RED};margin-top:6px;">{failed_msgs}</div>' if failed_msgs else ''}
+                {f'<div style="font-size:11px;color:{_GRAY};margin-top:6px;">ⓘ {note_msgs}</div>' if note_msgs else ''}
               </div>
             </div>
             """, unsafe_allow_html=True)

@@ -12,6 +12,11 @@ class CheckResult:
     fixable: bool = False
     fix_action: Optional[str] = None
     needs_client: bool = False  # True = cannot be auto-fixed, must go back to client
+    # Noted for awareness but not treated as a failure: it does not colour the
+    # row, count in the totals, or reach the client email. For rules that are in
+    # the written guidelines but are not enforced in practice — flagging those
+    # as failures sends agencies back for revisions nobody asked for.
+    advisory: bool = False
 
 
 def _normalise_format(fmt: str) -> str:
@@ -240,21 +245,26 @@ def check_gif_animation(img: Image.Image, spec: dict) -> list[CheckResult]:
                 message="1 play (no loop) ✓",
             ))
         elif loop_val == 0:
-            # 0 in GIF spec = loop forever
+            # 0 in GIF spec = loop forever. Advisory: the written guideline caps
+            # plays, but adops do not enforce it, so this must not fail the row.
             results.append(CheckResult(
                 name="Loop / Play Count",
-                passed=False,
-                message=f"Infinite loop detected — max {max_plays} plays ({max_plays - 1} additional loops) allowed (client must fix)",
-                needs_client=True,
+                passed=True,
+                message=f"Loops continuously — the written guideline allows "
+                        f"{max_plays} plays, but this is not enforced",
+                advisory=True,
             ))
         else:
             total_plays = loop_val + 1
-            ok = total_plays <= max_plays
+            within = total_plays <= max_plays
             results.append(CheckResult(
                 name="Loop / Play Count",
-                passed=ok,
-                message=f"{total_plays} play{'s' if total_plays != 1 else ''} {'✓' if ok else f'— max {max_plays} plays allowed (client must fix)'}",
-                needs_client=not ok,
+                passed=True,
+                message=(f"{total_plays} play{'s' if total_plays != 1 else ''} ✓"
+                         if within else
+                         f"{total_plays} plays — the written guideline allows "
+                         f"{max_plays}, but this is not enforced"),
+                advisory=not within,
             ))
 
     return results
