@@ -4,7 +4,7 @@ import io, os, re, zipfile, datetime
 # Bump on every release so a deploy can be confirmed at a glance. The build
 # stamp below is derived from the file's own mtime, which on Streamlit Cloud is
 # the checkout time — so it moves on every deploy without being maintained.
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -294,6 +294,10 @@ p, span, label, div { color: #3A3A3A; }
     border: 1px solid #DBE3EA !important;
     border-radius: 10px !important;
     padding: 16px 12px 14px !important;
+    /* Streamlit gives a keyed container align-items:start, which shrink-wraps
+       every row to its text. The rows must span the card for the asset count
+       to sit in its own right-hand column instead of against the name. */
+    align-items: stretch !important;
 }
 /* The key class lands on the vertical block itself, so match it directly as
    well as any nested block. */
@@ -301,7 +305,13 @@ p, span, label, div { color: #3A3A3A; }
 .st-key-adproducts_card [data-testid="stVerticalBlock"] {
     gap: 1px !important;
 }
-[class*="st-key-chk_"] { margin: 0 !important; }
+/* Streamlit ships these containers as width:fit-content, so each row would
+   shrink to its own text and strand the asset count against the product name
+   instead of in a right-hand column. */
+[class*="st-key-chk_"] {
+    margin: 0 !important;
+    width: 100% !important;
+}
 
 [class*="st-key-chk_"] [data-testid="stCheckbox"] {
     background: transparent;
