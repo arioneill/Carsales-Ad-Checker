@@ -946,11 +946,21 @@ with right_col:
                             r["img"].copy(), r["fb"], r["fmt"], spec, checks
                         )
                     if applied:
-                        st.success(f"Fixed: {', '.join(applied)}")
+                        # Only call it fixed if it actually came in under the
+                        # limit — a file still over spec must not look resolved.
+                        _lim = spec.get("max_file_size_kb")
+                        _kb  = len(fixed_bytes) / 1024
+                        if _lim is not None and _kb > _lim:
+                            st.warning(
+                                f"Partly fixed: {', '.join(applied)}. "
+                                f"This still needs to go back to the client."
+                            )
+                        else:
+                            st.success(f"Fixed: {', '.join(applied)}")
                         ext_ = new_fmt.lower().replace("jpeg", "jpg")
                         base = os.path.splitext(fname)[0]
                         st.download_button(
-                            f"⬇ Download fixed  ({len(fixed_bytes)/1024:.1f} KB)",
+                            f"⬇ Download fixed  ({_kb:.1f} KB)",
                             fixed_bytes, f"{base}_fixed.{ext_}",
                             f"image/{ext_}", key=f"dl_{sk}",
                         )
