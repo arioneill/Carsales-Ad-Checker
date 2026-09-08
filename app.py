@@ -4,7 +4,7 @@ import io, os, re, zipfile, datetime
 # Bump on every release so a deploy can be confirmed at a glance. The build
 # stamp below is derived from the file's own mtime, which on Streamlit Cloud is
 # the checkout time — so it moves on every deploy without being maintained.
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -429,28 +429,36 @@ def _find_slot(w: int, h: int, expected_img: list[str], matched: dict,
     return None
 
 
-def _open_extra_slot(w: int, h: int, expected: list[str],
-                     expected_img: list[str]) -> str | None:
-    """Grow an unlimited spec (carousel cards) to fit one more file.
+def _grow_slot(expected: list[str], expected_img: list[str], base: str) -> str:
+    """Append another slot to a spec, next to its siblings so results group."""
+    siblings = [s for s in expected if slot_base(s) == base]
+    new_slot = f"{base}#{len(siblings) + 1}"
+    expected.insert(expected.index(siblings[-1]) + 1, new_slot)
+    expected_img.append(new_slot)
+    return new_slot
 
-    min_count is a floor, not a quota, so a fourth card should be checked like
-    the first three rather than reported as unmatched. The new slot is inserted
-    beside its siblings so the results stay grouped.
+
+def _open_extra_slot(w: int, h: int, expected: list[str],
+                     expected_img: list[str], exact: bool = True) -> str | None:
+    """Fit another file of a size some selected spec already accepts.
+
+    Slot counts are a minimum, not a quota: a campaign routinely carries
+    several creatives per placement — three Cards, two Roadblock sets — and
+    every one of them needs checking. Previously the second file of a given
+    size found its slot taken and fell through to "skipped", which read as
+    though it were the wrong size.
     """
     for base in dict.fromkeys(slot_base(s) for s in expected):
         spec = FORMATS[base]
-        if not spec.get("unlimited") or spec.get("is_video"):
+        if spec.get("is_video"):
             continue
-        fits = ((spec["dimensions"] and tuple(spec["dimensions"]) == (w, h))
-                or (spec.get("aspect_ratio") == "1:1"
-                    and spec["dimensions"] is None and w == h))
-        if not fits:
-            continue
-        siblings = [s for s in expected if slot_base(s) == base]
-        new_slot = f"{base}#{len(siblings) + 1}"
-        expected.insert(expected.index(siblings[-1]) + 1, new_slot)
-        expected_img.append(new_slot)
-        return new_slot
+        if exact:
+            fits = bool(spec["dimensions"]) and tuple(spec["dimensions"]) == (w, h)
+        else:
+            fits = (spec.get("aspect_ratio") == "1:1"
+                    and spec["dimensions"] is None and w == h)
+        if fits:
+            return _grow_slot(expected, expected_img, base)
     return None
 
 
@@ -653,9 +661,9 @@ with left_col:
             if prod not in FORMAT_GROUPS:
                 continue
             key   = "chk_" + re.sub(r"[^a-z0-9]+", "_", prod.lower()).strip("_")
+            # Every count is a minimum now, so no product carries a "+" badge —
+            # the note under Required assets says so once for all of them.
             count = str(len(group_slots(prod)))
-            if any(FORMATS[k].get("unlimited") for k in FORMAT_GROUPS[prod]):
-                count += "+"   # a floor, not a quota
             count_css += (
                 f'.st-key-{key} [data-testid="stCheckbox"] > label::after'
                 f'{{content:"{count}";}}'
@@ -713,11 +721,13 @@ with left_col:
                 f'<span style="font-size:11px;color:{_JET};">{short}</span>'
                 f'</div>'
             )
-        if any(FORMATS[k].get("unlimited") for k in FORMAT_GROUPS[prod]):
-            assets_html += (
-                f'<div style="font-size:10px;color:{_GRAY};font-style:italic;'
-                f'margin:2px 0 0 16px;">+ further cards accepted, no maximum</div>'
-            )
+    if assets_html:
+        assets_html += (
+            f'<div style="font-size:10px;color:{_GRAY};font-style:italic;'
+            f'margin:10px 0 0;line-height:1.5;">'
+            f'Minimum set per product. Extra creatives at any size listed above '
+            f'are checked too — upload the whole campaign.</div>'
+        )
 
     fmt_str  = ", ".join(sorted(all_fmts)) if all_fmts else "—"
     size_str = f"{max(all_max_kb)} KB" if all_max_kb else "No limit"
@@ -861,14 +871,14 @@ with right_col:
                 img = Image.open(io.BytesIO(fb)); img.load()
                 fmt = img.format or ext.lstrip(".").upper() or "JPEG"
                 w, h = img.size
-                # Two passes: an exact dimension match always beats a slot that
-                # merely accepts "any square", otherwise a 627×627 carousel card
-                # would be swallowed by the logo slot sitting above it.
-                best = _find_slot(w, h, expected_img, matched, exact=True)
-                if best is None:
-                    best = _open_extra_slot(w, h, expected, expected_img)
-                if best is None:
-                    best = _find_slot(w, h, expected_img, matched, exact=False)
+                # Exact dimensions win over "any square" at every stage, or a
+                # 627×627 carousel card would be swallowed by the logo slot
+                # above it. Growing an exactly sized spec also beats handing the
+                # file to a free logo slot.
+                best = (_find_slot(w, h, expected_img, matched, exact=True)
+                        or _open_extra_slot(w, h, expected, expected_img, exact=True)
+                        or _find_slot(w, h, expected_img, matched, exact=False)
+                        or _open_extra_slot(w, h, expected, expected_img, exact=False))
                 if best:
                     checks = _img_checks(fb, fmt, best)
                     matched[best] = {
@@ -889,6 +899,11 @@ with right_col:
                 continue
             mb = len(fb) / (1024 * 1024)
             best_vsk = next((k for k in vid_pool if k not in matched), None)
+            if best_vsk is None and vid_pool:
+                # Extra cuts go to the first video spec on the booking. With two
+                # video products selected that is a guess, but checking against
+                # a plausible spec beats discarding the file as unmatched.
+                best_vsk = _grow_slot(expected, vid_pool, slot_base(vid_pool[0]))
             if best_vsk:
                 checks = _vid_checks(fb, fname, best_vsk)
                 matched[best_vsk] = {

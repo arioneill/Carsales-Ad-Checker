@@ -436,10 +436,13 @@ def slot_label(slot: str) -> str:
     name = FORMATS[base]["name"]
     if "#" not in slot:
         return name
-    n = slot.split("#", 1)[1]
-    if FORMATS[base].get("unlimited"):
+    n = int(slot.split("#", 1)[1])
+    spec = FORMATS[base]
+    if spec.get("unlimited"):
         return f"{name} — card {n}"
-    return f"{name} — {n} of {FORMATS[base]['min_count']}"
+    # Spec normally wants one file; this is an additional creative for the same
+    # placement, which a campaign can carry any number of.
+    return f"{name} — creative {n}"
 
 
 def is_unlimited(slot: str) -> bool:
