@@ -4,7 +4,7 @@ import io, os, re, zipfile, datetime
 # Bump on every release so a deploy can be confirmed at a glance. The build
 # stamp below is derived from the file's own mtime, which on Streamlit Cloud is
 # the checkout time — so it moves on every deploy without being maintained.
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.9.1"
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -294,6 +294,10 @@ p, span, label, div { color: #3A3A3A; }
     border: 1px solid #DBE3EA !important;
     border-radius: 10px !important;
     padding: 16px 12px 14px !important;
+    /* The column scales with the window, which on a wide screen stretched each
+       row — and so the selected row's highlight — to well over 400px. A product
+       list needs no more width than its longest name. */
+    max-width: 330px !important;
     /* Streamlit gives a keyed container align-items:start, which shrink-wraps
        every row to its text. The rows must span the card for the asset count
        to sit in its own right-hand column instead of against the name. */
@@ -765,7 +769,7 @@ with left_col:
 
     st.markdown(
         f'<div style="background:#fff;border:1px solid {_BORDER};border-radius:10px;'
-        f'padding:16px 20px;margin-top:12px;">'
+        f'padding:16px 20px;margin-top:12px;max-width:330px;">'
         f'<p style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
         f'text-transform:uppercase;color:{_ROYAL};margin:0 0 8px;">Required assets</p>'
         + (assets_html + footer if sel else
