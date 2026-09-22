@@ -4,7 +4,7 @@ import io, os, re, zipfile, datetime
 # Bump on every release so a deploy can be confirmed at a glance. The build
 # stamp below is derived from the file's own mtime, which on Streamlit Cloud is
 # the checkout time — so it moves on every deploy without being maintained.
-APP_VERSION = "1.9.1"
+APP_VERSION = "1.9.2"
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -1008,30 +1008,47 @@ with right_col:
             # Auto-fix button
             fixable = [c for c in checks if c.fixable]
             if fixable and not r.get("is_video"):
+                # Fingerprint the source so a result from a previous upload is
+                # never offered against a different file in the same slot.
+                fix_key = f"fixed_{sk}"
+                stamp   = (fname, len(r["fb"]))
+
                 if st.button("Apply fixes & download", key=f"fix_{sk}", type="primary"):
                     with st.spinner("Applying fixes..."):
                         fixed_bytes, new_fmt, applied = apply_fixes(
                             r["img"].copy(), r["fb"], r["fmt"], spec, checks
                         )
-                    if applied:
-                        # Only call it fixed if it actually came in under the
-                        # limit — a file still over spec must not look resolved.
-                        _lim = spec.get("max_file_size_kb")
-                        _kb  = len(fixed_bytes) / 1024
-                        if _lim is not None and _kb > _lim:
-                            st.warning(
-                                f"Partly fixed: {', '.join(applied)}. "
-                                f"This still needs to go back to the client."
-                            )
-                        else:
-                            st.success(f"Fixed: {', '.join(applied)}")
-                        ext_ = new_fmt.lower().replace("jpeg", "jpg")
-                        base = os.path.splitext(fname)[0]
-                        st.download_button(
-                            f"⬇ Download fixed  ({_kb:.1f} KB)",
-                            fixed_bytes, f"{base}_fixed.{ext_}",
-                            f"image/{ext_}", key=f"dl_{sk}",
+                    st.session_state[fix_key] = {
+                        "stamp": stamp, "bytes": fixed_bytes,
+                        "fmt": new_fmt, "applied": applied,
+                    }
+
+                # The download button must live OUTSIDE the `if st.button(...)`
+                # block. st.button is only True on the single rerun following
+                # its click, and clicking a download button triggers a rerun of
+                # its own -- so nested like that, the download button erases
+                # itself on click and the file never arrives. Holding the result
+                # in session_state lets it survive that rerun.
+                fixed = st.session_state.get(fix_key)
+                if fixed and fixed["stamp"] == stamp and fixed["applied"]:
+                    _lim = spec.get("max_file_size_kb")
+                    _kb  = len(fixed["bytes"]) / 1024
+                    # Only call it fixed if it actually came in under the
+                    # limit — a file still over spec must not look resolved.
+                    if _lim is not None and _kb > _lim:
+                        st.warning(
+                            f"Partly fixed: {', '.join(fixed['applied'])}. "
+                            f"This still needs to go back to the client."
                         )
+                    else:
+                        st.success(f"Fixed: {', '.join(fixed['applied'])}")
+                    ext_ = fixed["fmt"].lower().replace("jpeg", "jpg")
+                    base = os.path.splitext(fname)[0]
+                    st.download_button(
+                        f"⬇ Download fixed  ({_kb:.1f} KB)",
+                        fixed["bytes"], f"{base}_fixed.{ext_}",
+                        f"image/{ext_}", key=f"dl_{sk}",
+                    )
 
         # ── Missing rows ───────────────────────────────────────────────────────
         for sk in missing_keys:
