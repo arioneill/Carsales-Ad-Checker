@@ -4,7 +4,7 @@ import io, os, re, zipfile, datetime
 # Bump on every release so a deploy can be confirmed at a glance. The build
 # stamp below is derived from the file's own mtime, which on Streamlit Cloud is
 # the checkout time — so it moves on every deploy without being maintained.
-APP_VERSION = "1.9.6"
+APP_VERSION = "1.9.7"
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -67,7 +67,7 @@ _ACTION_HINTS = {
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Ad Spec Checker — carsales mediahouse",
-    page_icon="🚗",
+    page_icon=Image.open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "favicon.png")),
     layout="wide",
     initial_sidebar_state="collapsed",
 )
