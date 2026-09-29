@@ -4,7 +4,7 @@ import io, os, re, zipfile, datetime
 # Bump on every release so a deploy can be confirmed at a glance. The build
 # stamp below is derived from the file's own mtime, which on Streamlit Cloud is
 # the checkout time — so it moves on every deploy without being maintained.
-APP_VERSION = "1.9.2"
+APP_VERSION = "1.9.5"
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -302,6 +302,13 @@ p, span, label, div { color: #3A3A3A; }
        every row to its text. The rows must span the card for the asset count
        to sit in its own right-hand column instead of against the name. */
     align-items: stretch !important;
+}
+/* Streamlit gives every markdown block a -1rem bottom margin to cancel its
+   paragraph spacing. The header's own margin is only 6px, so the net -10px
+   pulled the first product row up over "Ad products" — hidden behind the
+   highlight whenever that row was selected. */
+.st-key-adproducts_card [data-testid="stMarkdownContainer"]:has(> p.adp-title) {
+    margin-bottom: 0 !important;
 }
 /* The key class lands on the vertical block itself, so match it directly as
    well as any nested block. */
@@ -680,7 +687,7 @@ with left_col:
     # the footer do not have to stitch borders together across sibling elements.
     with st.container(key="adproducts_card"):
         st.markdown(
-            f'<p style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
+            f'<p class="adp-title" style="font-size:10px;font-weight:700;letter-spacing:0.1em;'
             f'text-transform:uppercase;color:{_ROYAL};margin:0 0 6px;">Ad products</p>',
             unsafe_allow_html=True,
         )
