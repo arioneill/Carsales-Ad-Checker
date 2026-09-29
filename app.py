@@ -347,11 +347,18 @@ p, span, label, div { color: #3A3A3A; }
     font-weight: 700;
     color: #757575;
 }
+/* The tick box is a div too, so a bare `label > div` rule stretched it into a
+   bar filling whatever the name left over — a different length on every row.
+   Pin the box to its natural size and let only the text block grow. */
+[class*="st-key-chk_"] [data-testid="stCheckbox"] label > div {
+    flex: 0 0 auto;
+}
 /* Let the label text claim the space between the box and the count, otherwise
    the bolded selected row shrink-wraps and spills onto a second line. */
-[class*="st-key-chk_"] [data-testid="stCheckbox"] label > div {
+[class*="st-key-chk_"] [data-testid="stCheckbox"] label > div:has([data-testid="stMarkdownContainer"]) {
     flex: 1 1 auto;
     min-width: 0;
+    text-align: left;
 }
 [class*="st-key-chk_"] [data-testid="stCheckbox"] label p {
     font-size: 13px !important;
