@@ -317,14 +317,21 @@ p, span, label, div { color: #3A3A3A; }
     width: 100% !important;
 }
 
+/* The checkbox widget inside each row is fit-content too, and the label's
+   width:100% resolved against it — so every row, and its selected highlight,
+   was only as long as its product name. Stretch both to the card and fix the
+   row height so every product reads as the same size and shape. */
 [class*="st-key-chk_"] [data-testid="stCheckbox"] {
     background: transparent;
     padding: 0;
     margin: 0 !important;
+    width: 100% !important;
 }
 [class*="st-key-chk_"] [data-testid="stCheckbox"] > label {
     display: flex !important;
-    width: 100%;
+    width: 100% !important;
+    box-sizing: border-box;
+    min-height: 34px;
     padding: 7px 8px;
     border-radius: 6px;
     align-items: center !important;
