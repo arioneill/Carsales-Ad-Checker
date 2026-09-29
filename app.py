@@ -4,7 +4,7 @@ import io, os, re, zipfile, datetime
 # Bump on every release so a deploy can be confirmed at a glance. The build
 # stamp below is derived from the file's own mtime, which on Streamlit Cloud is
 # the checkout time — so it moves on every deploy without being maintained.
-APP_VERSION = "1.9.5"
+APP_VERSION = "1.9.6"
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -306,8 +306,11 @@ p, span, label, div { color: #3A3A3A; }
 /* Streamlit gives every markdown block a -1rem bottom margin to cancel its
    paragraph spacing. The header's own margin is only 6px, so the net -10px
    pulled the first product row up over "Ad products" — hidden behind the
-   highlight whenever that row was selected. */
-.st-key-adproducts_card [data-testid="stMarkdownContainer"]:has(> p.adp-title) {
+   highlight whenever that row was selected. The footer had the same problem
+   at the other end: the -1rem swallowed the card's bottom padding and sat
+   "1 product selected" on the border line. */
+.st-key-adproducts_card [data-testid="stMarkdownContainer"]:has(> p.adp-title),
+.st-key-adproducts_card [data-testid="stMarkdownContainer"]:has(> div.adp-footer) {
     margin-bottom: 0 !important;
 }
 /* The key class lands on the vertical block itself, so match it directly as
@@ -716,7 +719,7 @@ with left_col:
 
         total_assets = sum(len(group_slots(p)) for p in sel if p in FORMAT_GROUPS)
         st.markdown(
-            f'<div style="display:flex;justify-content:space-between;'
+            f'<div class="adp-footer" style="display:flex;justify-content:space-between;'
             f'border-top:1px solid {_HAIR};padding-top:12px;margin-top:10px;">'
             f'<span style="font-size:11px;color:{_GRAY};">'
             f'{len(sel)} product{"s" if len(sel)!=1 else ""} selected</span>'
