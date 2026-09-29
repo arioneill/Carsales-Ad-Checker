@@ -4,7 +4,7 @@ import io, os, re, zipfile, datetime
 # Bump on every release so a deploy can be confirmed at a glance. The build
 # stamp below is derived from the file's own mtime, which on Streamlit Cloud is
 # the checkout time — so it moves on every deploy without being maintained.
-APP_VERSION = "1.9.8"
+APP_VERSION = "1.9.9"
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -1319,19 +1319,19 @@ with right_col:
     st.markdown(_hairline(), unsafe_allow_html=True)
 
     with st.expander("🗜  Quick compress — shrink a file without running a check"):
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            target_kb = st.number_input(
-                "Target size (KB)", min_value=5, max_value=10_000,
-                value=80, step=5, key="qc_target",
-                help="80 KB is the carsales Network display limit.",
-            )
-        with c2:
-            keep_png = st.checkbox(
-                "Keep PNG (preserves transparency)", value=False, key="qc_png",
-                help="Leave off to output JPEG, which compresses far harder. "
-                     "Turn on only if the creative needs a transparent background.",
-            )
+        # Stacked, not in columns, to match Quick resize: a full-width field
+        # with its option ticked underneath, rather than a checkbox floating
+        # beside the field and out of line with it.
+        target_kb = st.number_input(
+            "Target size (KB)", min_value=5, max_value=10_000,
+            value=80, step=5, key="qc_target",
+            help="80 KB is the carsales Network display limit.",
+        )
+        keep_png = st.checkbox(
+            "Keep PNG (preserves transparency)", value=False, key="qc_png",
+            help="Leave off to output JPEG, which compresses far harder. "
+                 "Turn on only if the creative needs a transparent background.",
+        )
 
         qfiles = st.file_uploader(
             "Files to compress",
